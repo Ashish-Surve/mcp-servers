@@ -1,80 +1,104 @@
 """Code analysis module using tree-sitter for parsing Python code."""
 
-import logging
-from dataclasses import dataclass, field
+import sys
 from pathlib import Path
 from typing import Optional
 
 import tree_sitter_python as tspython
 from tree_sitter import Language, Parser
 
-# Use stderr for logging (stdout is reserved for MCP JSON-RPC)
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-logger = logging.getLogger(__name__)
+from ..config import SKIP_DIRS
+from ..exceptions import AnalysisError, InvalidPathError
+from ..utils.logging import get_logger
+from ..utils.paths import get_module_name
+from .models import ClassInfo, CodebaseAnalysis, FileAnalysis, ImportInfo
 
+# Use tomllib for Python 3.11+, tomli for earlier versions
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
-@dataclass
-class ClassInfo:
-    """Information about a Python class."""
-
-    name: str
-    base_classes: list[str] = field(default_factory=list)
-    attributes: list[str] = field(default_factory=list)
-    methods: list[str] = field(default_factory=list)
-    is_enum: bool = False
-    enum_values: list[str] = field(default_factory=list)
-    docstring: Optional[str] = None
-    file_path: str = ""
-
-
-@dataclass
-class ImportInfo:
-    """Information about imports in a file."""
-
-    module: str
-    names: list[str] = field(default_factory=list)
-    is_from_import: bool = False
-
-
-@dataclass
-class FileAnalysis:
-    """Analysis results for a single Python file."""
-
-    file_path: str
-    classes: list[ClassInfo] = field(default_factory=list)
-    imports: list[ImportInfo] = field(default_factory=list)
-    module_name: str = ""
-
-
-@dataclass
-class CodebaseAnalysis:
-    """Analysis results for an entire codebase."""
-
-    files: list[FileAnalysis] = field(default_factory=list)
-    all_classes: dict[str, ClassInfo] = field(default_factory=dict)
-    module_dependencies: dict[str, set[str]] = field(default_factory=dict)
+logger = get_logger(__name__)
 
 
 class CodeAnalyzer:
     """Analyzes Python code using tree-sitter."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the tree-sitter parser for Python."""
         self.parser = Parser(Language(tspython.language()))
 
-    def analyze_directory(self, dirpath: str) -> CodebaseAnalysis:
+    def _find_package_dirs(self, project_path: Path) -> list[Path]:
+        """Find the main package directories from pyproject.toml.
+
+        Falls back to common patterns if pyproject.toml not found.
+
+        Args:
+            project_path: Root directory of the project
+
+        Returns:
+            List of package directory paths
         """
-        Recursively analyze all Python files in a directory.
+        pyproject_path = project_path / "pyproject.toml"
+
+        if pyproject_path.exists():
+            try:
+                with open(pyproject_path, "rb") as f:
+                    pyproject = tomllib.load(f)
+
+                # Try hatchling build config
+                packages = (
+                    pyproject.get("tool", {})
+                    .get("hatchling", {})
+                    .get("build", {})
+                    .get("targets", {})
+                    .get("wheel", {})
+                    .get("packages", [])
+                )
+                if packages:
+                    return [project_path / pkg for pkg in packages]
+
+                # Try setuptools packages
+                packages = pyproject.get("tool", {}).get("setuptools", {}).get("packages", [])
+                if packages:
+                    return [project_path / pkg for pkg in packages]
+
+            except Exception as e:
+                logger.warning(f"Failed to parse pyproject.toml: {e}")
+
+        # Fallback: look for common package structures
+        candidates = []
+        for pattern in ["src/*", "lib/*", "*"]:
+            for path in project_path.glob(pattern):
+                if path.is_dir() and (path / "__init__.py").exists():
+                    # Skip test directories
+                    if "test" not in path.name.lower():
+                        candidates.append(path)
+
+        if candidates:
+            return candidates
+
+        # Last resort: just use src/ if it exists, otherwise project root
+        src_dir = project_path / "src"
+        return [src_dir] if src_dir.exists() else [project_path]
+
+    def analyze_directory(self, dirpath: str, exclude_tests: bool = True) -> CodebaseAnalysis:
+        """Recursively analyze all Python files in a directory.
 
         Args:
             dirpath: Path to the directory to analyze
+            exclude_tests: If True, only analyze main package code (from pyproject.toml)
 
         Returns:
             CodebaseAnalysis containing all discovered classes and relationships
+
+        Raises:
+            InvalidPathError: If the path doesn't exist
         """
         path = Path(dirpath)
         if not path.exists():
-            raise FileNotFoundError(f"Path does not exist: {dirpath}")
+            raise InvalidPathError(f"Path does not exist: {dirpath}")
 
         analysis = CodebaseAnalysis()
 
@@ -82,7 +106,27 @@ class CodeAnalyzer:
         if path.is_file() and path.suffix == ".py":
             python_files = [path]
         else:
-            python_files = list(path.rglob("*.py"))
+            # If excluding tests, focus on main package directories
+            if exclude_tests:
+                package_dirs = self._find_package_dirs(path)
+                logger.info(f"Analyzing package directories: {[str(d) for d in package_dirs]}")
+                python_files = []
+                for pkg_dir in package_dirs:
+                    for py_file in pkg_dir.rglob("*.py"):
+                        # Still skip common directories within the package
+                        if not any(skip_dir in py_file.parts for skip_dir in SKIP_DIRS):
+                            # Exclude test files even within package
+                            if "test" not in py_file.stem.lower() and "test" not in str(
+                                py_file.parent
+                            ).lower():
+                                python_files.append(py_file)
+            else:
+                # Find all Python files, excluding skip directories
+                python_files = []
+                for py_file in path.rglob("*.py"):
+                    # Check if any parent directory should be skipped
+                    if not any(skip_dir in py_file.parts for skip_dir in SKIP_DIRS):
+                        python_files.append(py_file)
 
         logger.info(f"Found {len(python_files)} Python files to analyze")
 
@@ -106,27 +150,34 @@ class CodeAnalyzer:
                 logger.warning(f"Failed to parse {py_file}: {e}")
                 continue
 
-        logger.info(f"Analyzed {len(analysis.files)} files, found {len(analysis.all_classes)} classes")
+        logger.info(
+            f"Analyzed {len(analysis.files)} files, found {len(analysis.all_classes)} classes"
+        )
         return analysis
 
     def analyze_python_file(self, filepath: str) -> FileAnalysis:
-        """
-        Parse a Python file and extract classes, methods, and imports.
+        """Parse a Python file and extract classes, methods, and imports.
 
         Args:
             filepath: Path to the Python file
 
         Returns:
             FileAnalysis containing extracted information
+
+        Raises:
+            AnalysisError: If file cannot be parsed
         """
-        with open(filepath, "rb") as f:
-            source_code = f.read()
+        try:
+            with open(filepath, "rb") as f:
+                source_code = f.read()
+        except Exception as e:
+            raise AnalysisError(f"Failed to read file {filepath}: {e}") from e
 
         tree = self.parser.parse(source_code)
         root_node = tree.root_node
 
         analysis = FileAnalysis(file_path=filepath)
-        analysis.module_name = self._get_module_name(filepath)
+        analysis.module_name = get_module_name(filepath)
 
         # Extract classes
         for node in self._find_nodes_by_type(root_node, "class_definition"):
@@ -148,20 +199,16 @@ class CodeAnalyzer:
 
         return analysis
 
-    def _get_module_name(self, filepath: str) -> str:
-        """Extract module name from file path."""
-        path = Path(filepath)
-        # Remove .py extension and convert to module notation
-        parts = path.with_suffix("").parts
-        # Find index of 'src' or use all parts
-        try:
-            src_idx = parts.index("src") + 1
-            return ".".join(parts[src_idx:])
-        except ValueError:
-            return path.stem
-
     def _find_nodes_by_type(self, node, node_type: str):
-        """Recursively find all nodes of a given type."""
+        """Recursively find all nodes of a given type.
+
+        Args:
+            node: Tree-sitter node to search from
+            node_type: Type of nodes to find
+
+        Yields:
+            Matching tree-sitter nodes
+        """
         if node.type == node_type:
             yield node
 
@@ -169,14 +216,21 @@ class CodeAnalyzer:
             yield from self._find_nodes_by_type(child, node_type)
 
     def _extract_class_info(self, node, source_code: bytes) -> Optional[ClassInfo]:
-        """Extract information from a class definition node."""
+        """Extract information from a class definition node.
+
+        Args:
+            node: Tree-sitter class_definition node
+            source_code: Source code as bytes
+
+        Returns:
+            ClassInfo object or None if extraction fails
+        """
         # Get class name
         name_node = node.child_by_field_name("name")
         if not name_node:
             return None
 
         class_name = source_code[name_node.start_byte : name_node.end_byte].decode("utf-8")
-
         class_info = ClassInfo(name=class_name)
 
         # Extract base classes
@@ -213,16 +267,23 @@ class CodeAnalyzer:
                         else:
                             class_info.attributes.append(attr)
 
-                elif child.type == "expression_statement" and child.children:
                     # String literal (docstring)
-                    if child.children[0].type == "string":
+                    if child.children and child.children[0].type == "string":
                         docstring = source_code[child.start_byte : child.end_byte].decode("utf-8")
                         class_info.docstring = docstring.strip('"\'')
 
         return class_info
 
     def _extract_method_info(self, node, source_code: bytes) -> Optional[str]:
-        """Extract method name and parameters."""
+        """Extract method name and parameters.
+
+        Args:
+            node: Tree-sitter function_definition node
+            source_code: Source code as bytes
+
+        Returns:
+            Method signature string or None
+        """
         name_node = node.child_by_field_name("name")
         if not name_node:
             return None
@@ -238,7 +299,15 @@ class CodeAnalyzer:
         return f"{method_name}()"
 
     def _extract_init_attributes(self, node, source_code: bytes) -> list[str]:
-        """Extract self.attribute assignments from __init__ method."""
+        """Extract self.attribute assignments from __init__ method.
+
+        Args:
+            node: Tree-sitter function_definition node
+            source_code: Source code as bytes
+
+        Returns:
+            List of attribute names or signatures
+        """
         attributes = []
         body_node = node.child_by_field_name("body")
         if not body_node:
@@ -254,8 +323,12 @@ class CodeAnalyzer:
                         attr_node = left_node.child_by_field_name("attribute")
 
                         if obj_node and attr_node:
-                            obj_name = source_code[obj_node.start_byte : obj_node.end_byte].decode("utf-8")
-                            attr_name = source_code[attr_node.start_byte : attr_node.end_byte].decode("utf-8")
+                            obj_name = source_code[obj_node.start_byte : obj_node.end_byte].decode(
+                                "utf-8"
+                            )
+                            attr_name = source_code[
+                                attr_node.start_byte : attr_node.end_byte
+                            ].decode("utf-8")
 
                             if obj_name == "self":
                                 # Try to get type annotation
@@ -268,8 +341,15 @@ class CodeAnalyzer:
         return attributes
 
     def _get_type_annotation(self, node, source_code: bytes) -> Optional[str]:
-        """Try to extract type annotation from assignment."""
-        # This is a simplified version - tree-sitter can extract more detailed type info
+        """Try to extract type annotation from assignment.
+
+        Args:
+            node: Tree-sitter assignment node
+            source_code: Source code as bytes
+
+        Returns:
+            Type annotation string or None
+        """
         right_node = node.child_by_field_name("right")
         if right_node:
             # Check for typed expressions
@@ -278,7 +358,15 @@ class CodeAnalyzer:
         return None
 
     def _extract_assignment(self, node, source_code: bytes) -> Optional[str]:
-        """Extract variable name from assignment statement."""
+        """Extract variable name from assignment statement.
+
+        Args:
+            node: Tree-sitter node
+            source_code: Source code as bytes
+
+        Returns:
+            Variable name or None
+        """
         for assign_node in self._find_nodes_by_type(node, "assignment"):
             left_node = assign_node.child_by_field_name("left")
             if left_node and left_node.type == "identifier":
@@ -286,15 +374,28 @@ class CodeAnalyzer:
                 return var_name
         return None
 
-    def _extract_import_info(self, node, source_code: bytes, is_from: bool = False) -> Optional[ImportInfo]:
-        """Extract import information."""
+    def _extract_import_info(
+        self, node, source_code: bytes, is_from: bool = False
+    ) -> Optional[ImportInfo]:
+        """Extract import information.
+
+        Args:
+            node: Tree-sitter import node
+            source_code: Source code as bytes
+            is_from: Whether this is a 'from' import
+
+        Returns:
+            ImportInfo object or None
+        """
         if is_from:
             # from module import name1, name2
             module_node = node.child_by_field_name("module_name")
             if not module_node:
                 return None
 
-            module_name = source_code[module_node.start_byte : module_node.end_byte].decode("utf-8")
+            module_name = source_code[module_node.start_byte : module_node.end_byte].decode(
+                "utf-8"
+            )
             import_info = ImportInfo(module=module_name, is_from_import=True)
 
             # Extract imported names
@@ -307,7 +408,9 @@ class CodeAnalyzer:
         else:
             # import module
             for dotted_name_node in self._find_nodes_by_type(node, "dotted_name"):
-                module_name = source_code[dotted_name_node.start_byte : dotted_name_node.end_byte].decode("utf-8")
+                module_name = source_code[
+                    dotted_name_node.start_byte : dotted_name_node.end_byte
+                ].decode("utf-8")
                 return ImportInfo(module=module_name, is_from_import=False)
 
         return None

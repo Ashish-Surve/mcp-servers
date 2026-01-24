@@ -1,24 +1,21 @@
 # Diagram Generator MCP Server
 
-A Model Context Protocol (MCP) server that automatically generates UML class diagrams and component architecture diagrams from Python codebases using tree-sitter and Graphviz.
+Generate UML and architecture diagrams from Python codebases using tree-sitter parsing or LLM-driven intelligent analysis.
+
+![Example UML Diagram](docs/images/example_diagram.png)
 
 ## Features
 
-- **UML Class Diagrams**: Automatically extract classes, methods, attributes, inheritance relationships, and enums
-- **Component Diagrams**: Visualize module structure and dependencies
-- **Tree-sitter Parsing**: Fast, reliable code analysis without executing code
-- **Auto-organized Output**: Creates `arch/diagrams/` directory with both `.dot` and `.png` files
-- **MCP Integration**: Works seamlessly with Claude Desktop and other MCP clients
+- **UML Class Diagrams**: Classes, methods, attributes, inheritance, enums
+- **Component Diagrams**: Module structure and dependencies
+- **Fast Mode**: Tree-sitter parsing (2-5 seconds)
+- **LLM Mode**: Context-aware custom diagrams (10-30 seconds)
+- **Flexible Layouts**: Horizontal (LR) or vertical (TB)
+- **Auto Output**: Creates `arch/diagrams/` with `.dot` and `.png` files
 
 ## Installation
 
 ### Prerequisites
-
-- Python 3.10 or higher
-- [uv](https://github.com/astral-sh/uv) package manager
-- Graphviz system library (for rendering diagrams)
-
-Install Graphviz:
 
 ```bash
 # macOS
@@ -26,27 +23,18 @@ brew install graphviz
 
 # Ubuntu/Debian
 sudo apt-get install graphviz
-
-# Windows (via chocolatey)
-choco install graphviz
 ```
 
-### Install the MCP Server
+### Install Server
 
 ```bash
-cd /Users/devwork/Developer/Project/mcp-servers/diagram-generator
+cd diagram-generator
 uv pip install -e .
 ```
 
-## Configuration
+### Configure Claude Desktop
 
-### Claude Desktop
-
-Add to your Claude Desktop configuration file:
-
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-
-**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -55,7 +43,7 @@ Add to your Claude Desktop configuration file:
       "command": "uv",
       "args": [
         "--directory",
-        "/Users/devwork/Developer/Project/mcp-servers/diagram-generator",
+        "/path/to/diagram-generator",
         "run",
         "diagram-generator"
       ]
@@ -64,201 +52,121 @@ Add to your Claude Desktop configuration file:
 }
 ```
 
-Restart Claude Desktop after adding the configuration.
+Restart Claude Desktop.
 
 ## Usage
 
-### Available Tools
+### Fast Mode
 
-#### 1. `generate_uml_diagram`
-
-Generates a UML class diagram from your Python codebase.
-
-**Parameters**:
-- `path` (string): Absolute path to the directory or file to analyze
-
-**Example**:
 ```
-Generate a UML diagram for /path/to/my/project
+Generate UML and component diagrams for /path/to/my/project
 ```
 
-**Output**:
-- `arch/diagrams/class_diagram.dot` - Graphviz source
-- `arch/diagrams/class_diagram.png` - Rendered image
+Uses `generate_uml_diagram` and `generate_component_diagram` tools for quick, standard diagrams.
 
-**Extracts**:
-- Class names and structure
-- Attributes (from `__init__` and class-level)
-- Methods (with signatures)
-- Inheritance relationships
-- Enum types and values
-- Relationships between classes
+### LLM Mode
 
-#### 2. `generate_component_diagram`
-
-Generates a high-level component/architecture diagram.
-
-**Parameters**:
-- `path` (string): Absolute path to the directory to analyze
-
-**Example**:
 ```
-Generate a component diagram for /path/to/my/project
+Analyze my project and create a diagram focusing on the authentication system at /path/to/my/project
 ```
 
-**Output**:
-- `arch/diagrams/component_diagram.dot` - Graphviz source
-- `arch/diagrams/component_diagram.png` - Rendered image
+Uses `analyze_codebase_structure` + `render_diagram_from_dot` for intelligent, custom diagrams.
 
-**Shows**:
-- Module organization
-- Component grouping by package
-- Import dependencies
-- Architecture layers
+## Available Tools
 
-## Example Workflow
+### 1. `generate_uml_diagram`
+- **Input**: Path to directory/file, layout (LR/TB)
+- **Output**: `arch/diagrams/class_diagram.png`
+- **Features**: All classes, inheritance, methods, attributes
 
-1. Open Claude Desktop
-2. Ensure the diagram-generator server is configured
-3. Ask Claude:
-   ```
-   Generate UML and component diagrams for my project at /Users/me/myproject/src
-   ```
-4. Claude will use the MCP tools to analyze your code
-5. Find the generated diagrams in `arch/diagrams/`
+### 2. `generate_component_diagram`
+- **Input**: Path to directory
+- **Output**: `arch/diagrams/component_diagram.png`
+- **Features**: Modules, dependencies, architecture layers
+
+### 3. `analyze_codebase_structure`
+- **Input**: Path to directory
+- **Output**: JSON with classes, methods, imports, structure
+- **Use**: LLM analyzes and decides what to visualize
+
+### 4. `render_diagram_from_dot`
+- **Input**: DOT specification, output path, filename
+- **Output**: Custom `.dot` and `.png` files
+- **Use**: Render LLM-generated diagrams
+
+## When to Use Each Mode
+
+**Fast Mode**: Complete documentation, standard diagrams, reproducible output
+
+**LLM Mode**: Custom views (auth flow, data layer), intelligent grouping, focused diagrams, pattern detection
+
+## Examples
+
+**Quick diagrams:**
+```
+Generate diagrams for /Users/me/myproject/src
+```
+
+**Custom authentication diagram:**
+```
+Show me the authentication and authorization flow in /Users/me/myproject/src
+```
+
+**Multi-level views:**
+```
+Create high-level and detailed data layer diagrams for /Users/me/api-project
+```
 
 ## Output Structure
-
-After running the tools, you'll have:
 
 ```
 your-project/
 ├── arch/
 │   └── diagrams/
-│       ├── class_diagram.dot          # UML class diagram source
-│       ├── class_diagram.png          # UML class diagram image
-│       ├── component_diagram.dot      # Component diagram source
-│       └── component_diagram.png      # Component diagram image
+│       ├── class_diagram.dot
+│       ├── class_diagram.png
+│       ├── component_diagram.dot
+│       └── component_diagram.png
 └── (your source code)
 ```
-
-## Technical Details
-
-### Architecture
-
-- **Tree-sitter**: Parses Python code into AST for accurate extraction
-- **Graphviz**: Generates professional diagrams with automatic layout
-- **FastMCP**: Minimal boilerplate for MCP server implementation
-
-### Components
-
-- `analyzer.py`: Code analysis using tree-sitter
-- `diagram_builder.py`: Graphviz diagram generation
-- `server.py`: MCP server tools
-
-### Supported Python Features
-
-- Classes and inheritance
-- Methods (including `__init__`)
-- Attributes (instance and class-level)
-- Enums (from `enum.Enum`)
-- Type annotations (partial)
-- Module imports
-
-### Limitations
-
-- Python-only (JavaScript, TypeScript, Java support can be added later)
-- Type annotations are partially extracted
-- Complex generics may not be fully represented
-- Only analyzes `.py` files
 
 ## Development
 
 ### Running Tests
 
-Create a test Python file:
-
-```python
-# test_example.py
-from enum import Enum
-
-class Priority(Enum):
-    HIGH = 1
-    LOW = 2
-
-class Task:
-    def __init__(self, title: str, priority: Priority):
-        self.title = title
-        self.priority = priority
-
-    def complete(self):
-        pass
+```bash
+uv run pytest tests/
+uv run pytest -v tests/
 ```
 
-Generate diagrams:
+### Running Server
 
 ```bash
-cd /path/to/test/directory
 uv run diagram-generator
-# Then call the tools via MCP
-```
-
-### Project Structure
-
-```
-diagram-generator/
-├── pyproject.toml
-├── README.md
-├── .gitignore
-└── src/
-    └── diagram_server/
-        ├── __init__.py
-        ├── server.py           # MCP server entry point
-        ├── analyzer.py         # Tree-sitter code analysis
-        └── diagram_builder.py  # Graphviz diagram generation
+# or
+uv run python -m diagram_server
 ```
 
 ## Troubleshooting
 
-### "Graphviz executable not found"
+**"Graphviz executable not found"** - Install graphviz system package
 
-Install Graphviz system package (see Prerequisites).
+**"No classes found"** - Ensure path contains `.py` files with classes and use absolute paths
 
-### "No classes found"
+**Diagrams not appearing** - Check MCP config, restart Claude Desktop, verify absolute paths
 
-Ensure the path contains `.py` files with class definitions. Check that the path is absolute.
+## Technical Details
 
-### "Permission denied"
+**Technologies**: Tree-sitter, Graphviz, FastMCP, Python 3.10+
 
-Ensure you have read permissions for the target directory and write permissions for the current working directory.
+**Supported**: Classes, inheritance, methods, attributes, enums, type annotations, imports
 
-### Diagrams not appearing in Claude Desktop
-
-1. Check that the MCP server is configured correctly
-2. Restart Claude Desktop
-3. Verify the path is absolute (not relative)
-
-## Future Enhancements
-
-- Support for JavaScript/TypeScript
-- ER diagram generation for database schemas
-- Sequence diagrams
-- Customizable styling and colors
-- Filtering options (e.g., only public methods)
-- Interactive HTML output
+**Limitations**: Python-only, partial type annotation extraction
 
 ## License
 
 MIT
 
-## Contributing
-
-Contributions welcome! Please submit issues or pull requests.
-
 ## Credits
 
-Built with:
-- [MCP (Model Context Protocol)](https://modelcontextprotocol.io/)
-- [tree-sitter](https://tree-sitter.github.io/tree-sitter/)
-- [Graphviz](https://graphviz.org/)
-- [FastMCP](https://github.com/jlowin/fastmcp)
+Built with [MCP](https://modelcontextprotocol.io/), [tree-sitter](https://tree-sitter.github.io/tree-sitter/), [Graphviz](https://graphviz.org/), [FastMCP](https://github.com/jlowin/fastmcp)
