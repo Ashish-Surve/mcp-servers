@@ -2,6 +2,7 @@
 
 Generate UML and architecture diagrams from Python codebases using tree-sitter parsing or LLM-driven intelligent analysis.
 
+Example from one of my other project.
 ![Example UML Diagram](https://raw.githubusercontent.com/Ashish-Surve/mcp-servers/main/diagram-generator/docs/images/example_diagram.png)
 
 ## Features
