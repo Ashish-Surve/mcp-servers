@@ -446,6 +446,43 @@ class GoalsManager:
         log.info("Updated status of %s to %s in %s", goal_code, status, resolved_id)
         return f"✅ Updated {goal_code} status to {emoji} in {resolved_id}"
 
+    # ── Tool: add_goal (unified) ──────────────────────────────────────────
+
+    def add_goal(
+        self,
+        level: str,
+        code: str,
+        goal: str,
+        feeds: str = "",
+        description: str = "",
+    ) -> str:
+        """Unified add-goal entry point. Auto-creates the goal file if needed.
+
+        level:       "longterm", "monthly", or "weekly"
+        code:        Goal identifier (e.g. "DS", "DS-M1", "DS-W1")
+        goal:        Goal description
+        feeds:       What this feeds into (empty for longterm)
+        description: Why it matters / any context
+        """
+        if level == "longterm":
+            return self.add_longterm_goal(code, goal, "", description, "")
+
+        if level == "monthly":
+            month_id = self.current_month_id()
+            path = self._monthly_path(month_id)
+            if not self._vault.get_file(path):
+                self.create_monthly_goals(month_id)
+            return self.add_monthly_goal(code, goal, feeds, description)
+
+        if level == "weekly":
+            week_id = self.current_week_id()
+            path = self._weekly_path(week_id)
+            if not self._vault.get_file(path):
+                self.create_weekly_goals(week_id)
+            return self.add_weekly_goal(code, goal, feeds)
+
+        return "❌ level must be one of: longterm, monthly, weekly."
+
     # ── Tool: add_longterm_goal ───────────────────────────────────────────
 
     def add_longterm_goal(
