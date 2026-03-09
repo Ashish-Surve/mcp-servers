@@ -25,7 +25,7 @@ log = logging.getLogger("obsidian-mcp")
 OBSIDIAN_URL = os.getenv("OBSIDIAN_URL", "https://127.0.0.1:27124/")
 API_KEY = os.getenv("OBSIDIAN_API_KEY")
 # Path from vault root to the 05-Daily-Notes folder
-VAULT_FOLDER = os.getenv("VAULT_FOLDER", "05-Daily-Notes")
+DAILY_NOTES_FOLDER = os.getenv("DAILY_NOTES_FOLDER", "05-Daily-Notes")
 CALENDAR_FOLDER = os.getenv("CALENDAR_FOLDER", "06-Calendar-Events")
 # Parent folder containing all numbered subfolders (02–07).
 # Leave empty if these folders are at the vault root.

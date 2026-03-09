@@ -7,7 +7,7 @@ or know about URLs, headers, or SSL configuration.
 
 import httpx
 from datetime import date
-from config import OBSIDIAN_URL, API_KEY, VAULT_FOLDER, CALENDAR_FOLDER, log
+from config import OBSIDIAN_URL, API_KEY, DAILY_NOTES_FOLDER, CALENDAR_FOLDER, log
 
 
 class VaultClient:
@@ -46,21 +46,21 @@ class VaultClient:
     def get_note(self, note_date: str) -> str:
         """Fetch raw markdown for a daily note. Returns '' if not found.
 
-        Path: {VAULT_FOLDER}/{YYYY}/{MM}/{YYYY-MM-DD}.md
-        VAULT_FOLDER points directly to the 05-Daily-Notes folder.
+        Path: {DAILY_NOTES_FOLDER}/{YYYY}/{MM}/{YYYY-MM-DD}.md
+        DAILY_NOTES_FOLDER points directly to the 05-Daily-Notes folder.
         """
         dt = date.fromisoformat(note_date)
-        path = f"{VAULT_FOLDER}/{dt.year}/{dt.month:02d}/{note_date}.md"
+        path = f"{DAILY_NOTES_FOLDER}/{dt.year}/{dt.month:02d}/{note_date}.md"
         return self.get_file(path)
 
     def save_note(self, note_date: str, content: str) -> None:
         """Overwrite a daily note with new content.
 
-        Path: {VAULT_FOLDER}/{YYYY}/{MM}/{YYYY-MM-DD}.md
-        VAULT_FOLDER points directly to the 05-Daily-Notes folder.
+        Path: {DAILY_NOTES_FOLDER}/{YYYY}/{MM}/{YYYY-MM-DD}.md
+        DAILY_NOTES_FOLDER points directly to the 05-Daily-Notes folder.
         """
         dt = date.fromisoformat(note_date)
-        path = f"{VAULT_FOLDER}/{dt.year}/{dt.month:02d}/{note_date}.md"
+        path = f"{DAILY_NOTES_FOLDER}/{dt.year}/{dt.month:02d}/{note_date}.md"
         self.save_file(path, content)
 
     # ── Calendar event I/O ───────────────────────────────────────────────
@@ -92,3 +92,12 @@ class VaultClient:
             return []
         resp.raise_for_status()
         return [f for f in resp.json().get("files", []) if f.endswith(".md")]
+
+    def list_folder(self, folder: str = "") -> list[str]:
+        """List all files in any vault folder. Returns [] if folder missing or empty."""
+        path = f"/vault/{folder}/" if folder else "/vault/"
+        resp = self._client.get(path)
+        if resp.status_code == 404:
+            return []
+        resp.raise_for_status()
+        return resp.json().get("files", [])
