@@ -46,6 +46,8 @@ def set_priority(
     date: str = "",
     tag: str = "",
     duration: str = "",
+    feeds: str = "",
+    why: str = "",
     start_time: str = "",
     end_time: str = "",
     category: str = "",
@@ -54,6 +56,8 @@ def set_priority(
     Set a priority slot in the daily note. Pass start_time+end_time+category to also create a linked calendar event.
 
     slot: 1=highest, 2=high, 3=medium | tag: datascience/guitar/habits/health/investing/learning/personal/prep
+    feeds: Obsidian link chain e.g. "[[2026-W08#DS-W1]] → [[2026-02#DS-M1]] → [[Long-Term-Goals#DS]]"
+    why: one-line reason e.g. "Build gym habit 3x/week throughout March"
     category: TimeBlocks/DataScience/Investing/Guitar/Habits/Work | date: YYYY-MM-DD, empty=today
     """
     target = date or notes.today()
@@ -76,7 +80,7 @@ def set_priority(
         time_block = f"[[{note_name}]]"
 
     try:
-        notes.fill_priority(target, slot, task, resolved_tag, duration, "", time_block)
+        notes.fill_priority(target, slot, task, resolved_tag, duration, why, time_block, feeds)
     except ValueError as exc:
         return f"❌ {exc}"
 
@@ -85,6 +89,41 @@ def set_priority(
         return f"✅ Priority {slot} set: {task} | {event_result}"
 
     return f"✅ Priority {slot} set: {task}"
+
+
+@mcp.tool()
+def update_priority(
+    slot: int,
+    date: str = "",
+    task: str = "",
+    feeds: str = "",
+    why: str = "",
+    time_estimate: str = "",
+    time_block: str = "",
+) -> str:
+    """
+    Patch fields in an existing priority slot without touching the rest. At least one field required.
+
+    slot: 1–3 | date: YYYY-MM-DD, empty=today
+    feeds: Obsidian link chain | why: one-line reason | time_estimate: e.g. "30 min"
+    time_block: Obsidian link to event e.g. "[[2026-03-09 Deep Work]]"
+    """
+    if not any([task, feeds, why, time_estimate, time_block]):
+        return "❌ Provide at least one field to update."
+
+    target = date or notes.today()
+
+    err = validate_priority(slot)
+    if err:
+        return f"❌ {err}"
+
+    try:
+        notes.patch_priority(target, slot, task, feeds, why, time_estimate, time_block)
+    except ValueError as exc:
+        return f"❌ {exc}"
+
+    updated = [f for f, v in [("task", task), ("feeds", feeds), ("why", why), ("time_estimate", time_estimate), ("time_block", time_block)] if v]
+    return f"✅ Priority {slot} updated: {', '.join(updated)}"
 
 
 @mcp.tool()
@@ -102,6 +141,31 @@ def clear_priority(slot: int, date: str = "") -> str:
         return f"❌ {exc}"
 
     return f"✅ Cleared priority slot {slot}."
+
+
+@mcp.tool()
+def get_priorities(date: str = "") -> str:
+    """Return all three priority slots for a day. date: YYYY-MM-DD, empty=today."""
+    target = date or notes.today()
+    slots = notes.get_priorities(target)
+
+    lines = [f"Priorities for {target}:"]
+    for n in (1, 2, 3):
+        s = slots[n]
+        if s is None:
+            lines.append(f"  [{n}] empty")
+        else:
+            done = "✅" if s["done"] else "⬜"
+            lines.append(f"  [{n}] {done} {s['task']} #{s['tag']}")
+            if s["feeds"]:
+                lines.append(f"       Feeds: {s['feeds']}")
+            if s["why"]:
+                lines.append(f"       Why: {s['why']}")
+            if s["time_estimate"]:
+                lines.append(f"       Est: {s['time_estimate']}")
+            if s["time_block"]:
+                lines.append(f"       Block: {s['time_block']}")
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -128,13 +192,38 @@ def add_note(
 
 @mcp.tool()
 def plan_tomorrow(
-    slot: int,
-    task: str,
+    slot: int = 0,
+    task: str = "",
     tag: str = "",
     date: str = "",
+    carry_over: bool = False,
 ) -> str:
-    """Set tomorrow priority slot (1–3) in today's Tomorrow Prep section. tag: datascience/guitar/habits/health/investing/learning/personal/prep. date: YYYY-MM-DD, empty=today."""
+    """
+    Set tomorrow priority slot in today's Tomorrow Prep section, or carry over incomplete priorities.
+
+    slot: 1–3 (required when carry_over=False) | tag: datascience/guitar/habits/health/investing/learning/personal/prep
+    carry_over: when True, reads today's incomplete priorities and pre-fills them into tomorrow slots (slot/task ignored)
+    date: YYYY-MM-DD, empty=today
+    """
     target = date or notes.today()
+
+    if carry_over:
+        slots = notes.get_priorities(target)
+        carried = []
+        for n in (1, 2, 3):
+            s = slots[n]
+            if s and not s["done"]:
+                try:
+                    notes.fill_tomorrow_priority(target, n, s["task"], s["tag"])
+                    carried.append(f"slot {n}: {s['task']}")
+                except ValueError:
+                    pass  # slot already filled in tomorrow prep — skip silently
+        if not carried:
+            return "✅ No incomplete priorities to carry over."
+        return "✅ Carried over:\n" + "\n".join(f"  {c}" for c in carried)
+
+    if not slot or not task:
+        return "❌ Provide slot + task, or set carry_over=True."
 
     err = validate_priority(slot)
     if err:
@@ -217,6 +306,60 @@ def delete_event(title: str, category: str, date: str = "") -> str:
     """Delete a calendar event. Use list_events first to confirm exact title. date: YYYY-MM-DD, empty=today."""
     target = date or notes.today()
     return cal.delete_event(title, category, target)
+
+
+# ── Queue Tools ───────────────────────────────────────────────────────────────
+
+QUEUE_PATH = "08-Queue/Priority-Queue.md"
+_STATUS_MARKER = {"promoted": "[>]", "done": "[x]", "cancelled": "[-]"}
+
+
+@mcp.tool()
+def queue_list() -> str:
+    """List all pending tasks in the priority queue. Returns numbered list (IDs for queue_update)."""
+    content = vault.get_file(QUEUE_PATH)
+    if not content:
+        return "✅ Queue is empty or file not found."
+
+    pending = [(i, line) for i, line in enumerate(content.split("\n")) if line.startswith("- [ ]")]
+    if not pending:
+        return "✅ No pending tasks in queue."
+
+    lines = [f"{n + 1}. {line[6:].strip()}" for n, (_, line) in enumerate(pending)]
+    return f"{len(lines)} pending task(s):\n" + "\n".join(lines)
+
+
+@mcp.tool()
+def queue_update(task_id: int, status: str) -> str:
+    """
+    Update a queue task status by its ID from queue_list.
+
+    task_id: 1-indexed position from queue_list
+    status: promoted | done | cancelled
+    """
+    if status not in _STATUS_MARKER:
+        return f"❌ status must be one of: {', '.join(_STATUS_MARKER)}"
+
+    content = vault.get_file(QUEUE_PATH)
+    if not content:
+        return f"❌ Queue file not found: {QUEUE_PATH}"
+
+    all_lines = content.split("\n")
+    pending_indices = [i for i, line in enumerate(all_lines) if line.startswith("- [ ]")]
+
+    if task_id < 1 or task_id > len(pending_indices):
+        return f"❌ task_id {task_id} out of range (queue has {len(pending_indices)} pending tasks)."
+
+    target_line_idx = pending_indices[task_id - 1]
+    all_lines[target_line_idx] = all_lines[target_line_idx].replace("- [ ]", f"- {_STATUS_MARKER[status]}", 1)
+
+    try:
+        vault.save_file(QUEUE_PATH, "\n".join(all_lines))
+    except Exception as exc:
+        return f"❌ {exc}"
+
+    task_text = all_lines[target_line_idx][6:].strip()
+    return f"✅ Task {task_id} marked {status}: {task_text}"
 
 
 # ── Vault Primitive Tools ─────────────────────────────────────────────────────
