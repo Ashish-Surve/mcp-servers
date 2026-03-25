@@ -81,21 +81,24 @@ class CalendarManager:
 
         return result
 
-    def list_events(self, category: str, event_date: str = "") -> str:
-        """List events in a category, optionally filtered by date."""
+    def list_events(self, category: str, event_date: str = "", end_date: str = "") -> str:
+        """List events in a category, optionally filtered by date or date range."""
         err = validate_category(category)
         if err:
             return f"❌ {err}"
 
         files = self._vault.list_event_files(category)
-        if event_date:
+
+        if event_date and end_date:
+            files = [f for f in files if event_date <= f[:10] <= end_date]
+        elif event_date:
             files = [f for f in files if f.startswith(event_date)]
 
         if not files:
-            suffix = f" for {event_date}" if event_date else ""
+            suffix = f" from {event_date} to {end_date}" if end_date else (f" for {event_date}" if event_date else "")
             return f"No events found in {category}{suffix}."
 
-        return "\n".join(files)
+        return "\n".join(sorted(files))
 
     def delete_event(self, title: str, category: str, event_date: str) -> str:
         """Delete a calendar event note."""

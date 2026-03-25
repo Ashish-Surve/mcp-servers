@@ -25,8 +25,9 @@ log = logging.getLogger("obsidian-mcp")
 OBSIDIAN_URL = os.getenv("OBSIDIAN_URL", "https://127.0.0.1:27124/")
 API_KEY = os.getenv("OBSIDIAN_API_KEY")
 # Path from vault root to the 05-Daily-Notes folder
-VAULT_FOLDER = os.getenv("VAULT_FOLDER", "05-Daily-Notes")
+DAILY_NOTES_FOLDER = os.getenv("DAILY_NOTES_FOLDER", "05-Daily-Notes")
 CALENDAR_FOLDER = os.getenv("CALENDAR_FOLDER", "06-Calendar-Events")
+KNOWLEDGE_FOLDER = os.getenv("KNOWLEDGE_FOLDER", "10-Knowledge")
 # Parent folder containing all numbered subfolders (02–07).
 # Leave empty if these folders are at the vault root.
 PLANNING_ROOT = os.getenv("PLANNING_ROOT", "")
@@ -39,6 +40,20 @@ if not API_KEY:
 VALID_CATEGORIES: set[str] = {
     "TimeBlocks", "DataScience", "Investing", "Guitar", "Habits", "Work",
 }
+
+# Canonical domain subfolders under KNOWLEDGE_FOLDER.
+# Any name is accepted (the Obsidian API creates folders on first write),
+# but these are the standard ones — use them for consistency.
+KNOWLEDGE_SUBFOLDERS: tuple[str, ...] = (
+    "AI-Engineering",
+    "Data-Science",
+    "Guitar",
+    "Health",
+    "Investing",
+    "MOCs",
+    "Personal",
+    "References",
+)
 
 VALID_TAGS: set[str] = {
     "datascience", "investing", "guitar", "habits",
