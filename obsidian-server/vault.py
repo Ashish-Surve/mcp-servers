@@ -85,6 +85,16 @@ class VaultClient:
         log.info("Deleted event: %s", path)
         return True
 
+    def delete_inbox_item(self, filename: str) -> bool:
+        """Delete a file from 09-Inbox/ only. Returns False if not found."""
+        path = f"09-Inbox/{filename}"
+        resp = self._client.delete(f"/vault/{path}")
+        if resp.status_code == 404:
+            return False
+        resp.raise_for_status()
+        log.info("Deleted inbox item: %s", path)
+        return True
+
     def list_event_files(self, category: str) -> list[str]:
         """List .md filenames in a category folder. Returns [] if folder missing."""
         resp = self._client.get(f"/vault/{CALENDAR_FOLDER}/{category}/")
@@ -101,3 +111,15 @@ class VaultClient:
             return []
         resp.raise_for_status()
         return resp.json().get("files", [])
+
+    def list_folder_recursive(self, folder: str = "") -> list[str]:
+        """Recursively list all files under a vault folder, returning full relative paths."""
+        entries = self.list_folder(folder)
+        result = []
+        for entry in entries:
+            if entry.endswith("/"):
+                subfolder = f"{folder}/{entry.rstrip('/')}" if folder else entry.rstrip("/")
+                result.extend(self.list_folder_recursive(subfolder))
+            else:
+                result.append(f"{folder}/{entry}" if folder else entry)
+        return result

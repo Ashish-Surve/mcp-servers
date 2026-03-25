@@ -4,7 +4,7 @@ from datetime import datetime, date, timedelta
 import re
 
 from mcp.server.fastmcp import FastMCP
-from config import validate_priority, validate_category, DAILY_NOTES_FOLDER
+from config import validate_priority, validate_category, DAILY_NOTES_FOLDER, KNOWLEDGE_FOLDER, KNOWLEDGE_SUBFOLDERS, PRIORITY_EMOJI
 from vault import VaultClient
 from notes import DailyNote
 from events import CalendarManager
@@ -100,6 +100,7 @@ def update_priority(
     why: str = "",
     time_estimate: str = "",
     time_block: str = "",
+    completed: bool = False,
 ) -> str:
     """
     Patch fields in an existing priority slot without touching the rest. At least one field required.
@@ -107,8 +108,9 @@ def update_priority(
     slot: 1–3 | date: YYYY-MM-DD, empty=today
     feeds: Obsidian link chain | why: one-line reason | time_estimate: e.g. "30 min"
     time_block: Obsidian link to event e.g. "[[2026-03-09 Deep Work]]"
+    completed: true to mark the checkbox done and stamp ✅ YYYY-MM-DD
     """
-    if not any([task, feeds, why, time_estimate, time_block]):
+    if not any([task, feeds, why, time_estimate, time_block, completed]):
         return "❌ Provide at least one field to update."
 
     target = date or notes.today()
@@ -118,11 +120,13 @@ def update_priority(
         return f"❌ {err}"
 
     try:
-        notes.patch_priority(target, slot, task, feeds, why, time_estimate, time_block)
+        notes.patch_priority(target, slot, task, feeds, why, time_estimate, time_block, completed)
     except ValueError as exc:
         return f"❌ {exc}"
 
     updated = [f for f, v in [("task", task), ("feeds", feeds), ("why", why), ("time_estimate", time_estimate), ("time_block", time_block)] if v]
+    if completed:
+        updated.append("completed")
     return f"✅ Priority {slot} updated: {', '.join(updated)}"
 
 
@@ -153,10 +157,10 @@ def get_priorities(date: str = "") -> str:
     for n in (1, 2, 3):
         s = slots[n]
         if s is None:
-            lines.append(f"  [{n}] empty")
+            lines.append(f"  [{n}] {PRIORITY_EMOJI[n]} empty")
         else:
             done = "✅" if s["done"] else "⬜"
-            lines.append(f"  [{n}] {done} {s['task']} #{s['tag']}")
+            lines.append(f"  [{n}] {PRIORITY_EMOJI[n]} {done} {s['task']} #{s['tag']}")
             if s["feeds"]:
                 lines.append(f"       Feeds: {s['feeds']}")
             if s["why"]:
@@ -296,9 +300,12 @@ def create_event(
 
 
 @mcp.tool()
-def list_events(category: str, date: str = "") -> str:
-    """List events by category. category: TimeBlocks/DataScience/Investing/Guitar/Habits/Work. date: YYYY-MM-DD filter, empty=all."""
-    return cal.list_events(category, date)
+def list_events(category: str, date: str = "", end_date: str = "") -> str:
+    """
+    List events by category. category: TimeBlocks/DataScience/Investing/Guitar/Habits/Work.
+    date: YYYY-MM-DD start filter, empty=all. end_date: YYYY-MM-DD for range view (requires date).
+    """
+    return cal.list_events(category, date, end_date)
 
 
 @mcp.tool()
@@ -312,6 +319,11 @@ def delete_event(title: str, category: str, date: str = "") -> str:
 
 QUEUE_PATH = "08-Queue/Priority-Queue.md"
 _STATUS_MARKER = {"promoted": "[>]", "done": "[x]", "cancelled": "[-]"}
+_QUEUE_SECTIONS = {
+    "p1": "## 🔺 P1 — Do Soon",
+    "p2": "## ⏫ P2 — Do This Week/Next",
+    "p3": "## 🔼 P3 — Someday",
+}
 
 
 @mcp.tool()
@@ -327,6 +339,53 @@ def queue_list() -> str:
 
     lines = [f"{n + 1}. {line[6:].strip()}" for n, (_, line) in enumerate(pending)]
     return f"{len(lines)} pending task(s):\n" + "\n".join(lines)
+
+
+@mcp.tool()
+def queue_add(task: str, priority: str, tag: str = "") -> str:
+    """
+    Add a task to the priority queue under the correct section.
+
+    priority: p1 (Do Soon) | p2 (Do This Week/Next) | p3 (Someday)
+    tag: optional tag appended to the task, e.g. 'work' → #work
+    """
+    priority = priority.lower().strip()
+    if priority not in _QUEUE_SECTIONS:
+        return f"❌ priority must be one of: {', '.join(_QUEUE_SECTIONS)}"
+
+    content = vault.get_file(QUEUE_PATH)
+    if not content:
+        return f"❌ Queue file not found: {QUEUE_PATH}"
+
+    heading = _QUEUE_SECTIONS[priority]
+    if heading not in content:
+        return f"❌ Section '{heading}' not found in queue file."
+
+    item = f"- [ ] {task}"
+    if tag:
+        item += f" #{tag.lstrip('#')}"
+
+    # Insert the new item right after the section heading (and any blank line)
+    lines = content.split("\n")
+    insert_at = None
+    for i, line in enumerate(lines):
+        if line.strip() == heading:
+            insert_at = i + 1
+            # Skip a single blank line after the heading if present
+            if insert_at < len(lines) and lines[insert_at].strip() == "":
+                insert_at += 1
+            break
+
+    if insert_at is None:
+        return f"❌ Could not locate section '{heading}'."
+
+    lines.insert(insert_at, item)
+    try:
+        vault.save_file(QUEUE_PATH, "\n".join(lines))
+    except Exception as exc:
+        return f"❌ {exc}"
+
+    return f"✅ Added to {heading}: {item}"
 
 
 @mcp.tool()
@@ -394,10 +453,10 @@ def vault_append(path: str, content: str) -> str:
 
 
 @mcp.tool()
-def vault_list(folder: str = "") -> str:
-    """List files in a vault folder. Leave empty for root listing."""
+def vault_list(folder: str = "", recursive: bool = False) -> str:
+    """List files in a vault folder. folder: relative path, empty=root. recursive: true to include all subfolders."""
     try:
-        files = vault.list_folder(folder)
+        files = vault.list_folder_recursive(folder) if recursive else vault.list_folder(folder)
         if not files:
             return f"No files found in '{folder}'"
         return "\n".join(files)
@@ -443,7 +502,7 @@ def inbox_list() -> str:
         unprocessed = [f for f in files if f.endswith(".md")]
         if not unprocessed:
             return "✅ Inbox is empty."
-        return f"{len(unprocessed)} items in inbox:\n" + "\n".join(unprocessed)
+        return f"{len(unprocessed)} item(s) in inbox:\n" + "\n".join(unprocessed)
     except Exception as e:
         return f"❌ {e}"
 
@@ -464,9 +523,11 @@ def knowledge_create(
 
     tags: comma-separated. E.g. "datascience,ml,python"
     moc: MOC this note belongs to — auto-adds backlink. E.g. "DataScience"
-    subfolder: MOCs|References or empty for root.
+    subfolder: domain folder under 10-Knowledge/ — auto-created on first write.
+      Canonical: AI-Engineering | Data-Science | Guitar | Health | Investing | MOCs | Personal | References
+      Empty = root of 10-Knowledge/.
     """
-    folder = f"10-Knowledge/{subfolder}" if subfolder else "10-Knowledge"
+    folder = f"{KNOWLEDGE_FOLDER}/{subfolder}" if subfolder else KNOWLEDGE_FOLDER
     path = f"{folder}/{title}.md"
 
     tag_list = "\n".join([f"  - {t.strip()}" for t in tags.split(",")]) if tags else ""
@@ -482,7 +543,7 @@ tags:
     vault.save_file(path, frontmatter + content + moc_link)
 
     if moc:
-        moc_path = f"10-Knowledge/MOCs/{moc}.md"
+        moc_path = f"{KNOWLEDGE_FOLDER}/MOCs/{moc}.md"
         vault_append(moc_path, f"\n- [[{title}]]")
 
     return f"✅ Knowledge note created: {path}"
@@ -496,7 +557,7 @@ def moc_create(title: str, description: str = "", tags: str = "") -> str:
     title: E.g. "DataScience", "Guitar", "Investing"
     tags: comma-separated.
     """
-    path = f"10-Knowledge/MOCs/{title}.md"
+    path = f"{KNOWLEDGE_FOLDER}/MOCs/{title}.md"
     tag_list = "\n".join([f"  - {t.strip()}" for t in tags.split(",")]) if tags else ""
 
     content = f"""---
@@ -528,6 +589,7 @@ def inbox_process(
     tags: str = "",
     project: str = "",
     moc: str = "",
+    subfolder: str = "",
 ) -> str:
     """
     Process an inbox item — route it to its permanent home and mark as processed.
@@ -538,6 +600,8 @@ def inbox_process(
     tags: comma-separated. E.g. "datascience,ml"
     project: required when destination=project. E.g. "Intelligent Payroll"
     moc: MOC name to link when destination=knowledge.
+    subfolder: domain folder under 10-Knowledge/ when destination=knowledge — auto-created on first write.
+      Canonical: AI-Engineering | Data-Science | Guitar | Health | Investing | MOCs | Personal | References
     """
     inbox_path = f"09-Inbox/{inbox_filename}"
     raw_content = vault.get_file(inbox_path)
@@ -557,21 +621,27 @@ def inbox_process(
     final_path = ""
 
     if destination in ("knowledge", "reference"):
-        subfolder = "References" if destination == "reference" else ""
+        resolved_subfolder = "References" if destination == "reference" else subfolder
         note_title = title or inbox_filename.replace(".md", "")
-        knowledge_create(note_title, body, tags, moc, subfolder)
-        final_path = f"10-Knowledge/{subfolder}/{note_title}.md" if subfolder else f"10-Knowledge/{note_title}.md"
+        final_path = f"{KNOWLEDGE_FOLDER}/{resolved_subfolder}/{note_title}.md" if resolved_subfolder else f"{KNOWLEDGE_FOLDER}/{note_title}.md"
+        if vault.get_file(final_path):
+            return f"❌ Duplicate: {final_path} already exists. Rename with title= or delete the existing note first."
+        knowledge_create(note_title, body, tags, moc, resolved_subfolder)
 
     elif destination == "moc":
         note_title = title or inbox_filename.replace(".md", "")
+        final_path = f"{KNOWLEDGE_FOLDER}/MOCs/{note_title}.md"
+        if vault.get_file(final_path):
+            return f"❌ Duplicate: {final_path} already exists. Rename with title= or delete the existing note first."
         moc_create(note_title, body, tags)
-        final_path = f"10-Knowledge/MOCs/{note_title}.md"
 
     elif destination == "project":
         if not project:
             return "❌ 'project' parameter required when destination=project"
         note_title = title or inbox_filename.replace(".md", "")
         final_path = f"Projects Information/{project}/{note_title}.md"
+        if vault.get_file(final_path):
+            return f"❌ Duplicate: {final_path} already exists. Rename with title= or delete the existing note first."
         vault.save_file(final_path, f"# {note_title}\n\n{body}")
 
     elif destination == "queue":
@@ -590,14 +660,14 @@ def inbox_process(
         vault_append(weekly_path, f"\n\n---\n{body}")
 
     elif destination == "delete":
-        vault.save_file(inbox_path, raw_content.replace("status: unprocessed", "status: deleted"))
-        return f"✅ Marked as deleted: {inbox_path}"
+        vault.delete_inbox_item(inbox_filename)
+        return f"✅ Deleted from inbox: {inbox_filename}"
 
     else:
         return f"❌ Unknown destination: {destination}"
 
-    vault.save_file(inbox_path, raw_content.replace("status: unprocessed", f"status: processed → {final_path}"))
-    return f"✅ Routed to: {final_path}"
+    vault.delete_inbox_item(inbox_filename)
+    return f"✅ Routed to {final_path} — inbox item deleted."
 
 
 # ── Weekly Review Tool ────────────────────────────────────────────────────────

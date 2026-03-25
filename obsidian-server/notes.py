@@ -173,10 +173,12 @@ class DailyNote:
         why: str = "",
         time_estimate: str = "",
         time_block: str = "",
+        completed: bool = False,
     ) -> None:
         """Patch individual fields in an already-filled priority slot.
 
         Only fields passed as non-empty strings are updated; others are left untouched.
+        Pass completed=True to mark the checkbox done and stamp ✅ YYYY-MM-DD.
         Uses fixed line offsets from the section header (template is always consistent):
 
           ### Priority N   ← header
@@ -206,12 +208,22 @@ class DailyNote:
 
         if task:
             existing = lines[idx + TASK_OFF]
-            # Preserve checkbox state, date, emoji, tag — replace task text only.
             # Line format: "- [x] #todo **Task:** TASKTEXT 📅 DATE EMOJI #TAG"
             marker_end = existing.index("**Task:** ") + len("**Task:** ")
             date_marker = " 📅 "
             date_pos = existing.index(date_marker, marker_end)
-            lines[idx + TASK_OFF] = existing[:marker_end] + task + existing[date_pos:]
+            date_suffix = existing[date_pos:]  # " 📅 DATE EMOJI #OLDTAG"
+
+            # If the new task text ends with an embedded #tag, extract it and
+            # replace the trailing tag in the date suffix so old tags are not kept.
+            task_clean = task
+            tag_match = re.search(r'\s(#\w+)$', task)
+            if tag_match:
+                task_clean = task[:tag_match.start()]
+                new_tag = tag_match.group(1)
+                date_suffix = re.sub(r'#\w+$', new_tag, date_suffix)
+
+            lines[idx + TASK_OFF] = existing[:marker_end] + task_clean + date_suffix
 
         if feeds is not None and feeds != "":
             lines[idx + FEEDS_OFF] = f"- **Feeds:** {feeds}"
@@ -224,6 +236,11 @@ class DailyNote:
 
         if time_block:
             lines[idx + BLOCK_OFF] = f"- **Time block:** {time_block}"
+
+        if completed:
+            task_line = lines[idx + TASK_OFF]
+            if task_line.startswith("- [ ]"):
+                lines[idx + TASK_OFF] = task_line.replace("- [ ]", "- [x]", 1) + f" ✅ {note_date}"
 
         self._vault.save_note(note_date, "\n".join(lines))
         log.info("Patched priority %d for %s", priority, note_date)
@@ -242,12 +259,16 @@ class DailyNote:
             raise ValueError(f"Priority {priority} section not found in the note.")
 
         before, after = content.split(label, 1)
-        updated_after = re.sub(
+        updated_after, n = re.subn(
             r"- \*\*Time block:\*\* .*",
             f"- **Time block:** {time_block}",
             after,
             count=1,
         )
+        if n == 0:
+            raise ValueError(
+                f"Priority {priority} time block line not found — slot may be empty or malformed."
+            )
         self._vault.save_note(note_date, before + label + updated_after)
         log.info("Set time block for priority %d: %s", priority, time_block)
 
@@ -435,11 +456,7 @@ _{day_name}, {month_name} {day_ordinal}, {dt.year}_
 ## 🔄 Habits
 
 - [ ] #todo Morning routine 📅 {for_date} 🔄 every day #habits
-- [ ] #todo Exercise/movement (30+ min) 📅 {for_date} 🔄 every day #health
 - [ ] #todo Proper nutrition & hydration 📅 {for_date} 🔄 every day #health
-- [ ] #todo Data science learning (15+ min) 📅 {for_date} 🔄 every day #datascience
-- [ ] #todo Guitar practice (15+ min) 📅 {for_date} 🔄 every day #guitar
-- [ ] #todo Investment research review 📅 {for_date} 🔄 every day #investing
 - [ ] #todo Evening reflection 📅 {for_date} 🔄 every day #habits
 
 ---
