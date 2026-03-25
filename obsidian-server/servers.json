@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "your-server": {
+      "command": "uv",
+      "args": ["run", "/Users/kakarot/Developer/Project/mcp-servers/obsidian-server/server.py"]
+    }
+  }
+}
+
