@@ -79,6 +79,9 @@ def set_priority(
         note_name = CalendarManager.event_note_name(target, task)
         time_block = f"[[{note_name}]]"
 
+    if not notes.exists(target):
+        notes.create(target)
+
     try:
         notes.fill_priority(target, slot, task, resolved_tag, duration, why, time_block, feeds)
     except ValueError as exc:
