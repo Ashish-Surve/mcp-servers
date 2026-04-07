@@ -522,7 +522,8 @@ def knowledge_create(
     Create an atomic knowledge note in 10-Knowledge/.
 
     tags: comma-separated. E.g. "datascience,ml,python"
-    moc: MOC this note belongs to — auto-adds backlink. E.g. "DataScience"
+    moc: MOC(s) this note belongs to — auto-adds backlink. Comma-separated for multiple.
+      E.g. "DataScience" or "Projects, AI Engineering"
     subfolder: domain folder under 10-Knowledge/ — auto-created on first write.
       Canonical: AI-Engineering | Data-Science | Guitar | Health | Investing | MOCs | Personal | References
       Empty = root of 10-Knowledge/.
@@ -531,7 +532,17 @@ def knowledge_create(
     path = f"{folder}/{title}.md"
 
     tag_list = "\n".join([f"  - {t.strip()}" for t in tags.split(",")]) if tags else ""
-    moc_link = f"\n\n---\n🗺️ MOC: [[{moc}]]" if moc else ""
+
+    # Parse moc: comma-separated string → deduplicated list
+    moc_list = [m.strip() for m in moc.split(",") if m.strip()] if moc else []
+    seen: set = set()
+    moc_list = [m for m in moc_list if not (m in seen or seen.add(m))]
+
+    if moc_list:
+        moc_links = " | ".join([f"[[{m}]]" for m in moc_list])
+        moc_link = f"\n\n---\n🗺️ MOC: {moc_links}"
+    else:
+        moc_link = ""
 
     frontmatter = f"""---
 date: {datetime.now().strftime("%Y-%m-%d")}
@@ -542,8 +553,8 @@ tags:
 """
     vault.save_file(path, frontmatter + content + moc_link)
 
-    if moc:
-        moc_path = f"{KNOWLEDGE_FOLDER}/MOCs/{moc}.md"
+    for m in moc_list:
+        moc_path = f"{KNOWLEDGE_FOLDER}/MOCs/{m}.md"
         vault_append(moc_path, f"\n- [[{title}]]")
 
     return f"✅ Knowledge note created: {path}"
@@ -599,7 +610,8 @@ def inbox_process(
     title: title for the new permanent note.
     tags: comma-separated. E.g. "datascience,ml"
     project: required when destination=project. E.g. "Intelligent Payroll"
-    moc: MOC name to link when destination=knowledge.
+    moc: MOC name(s) to link when destination=knowledge. Comma-separated for multiple.
+      E.g. "DataScience" or "Projects, AI Engineering"
     subfolder: domain folder under 10-Knowledge/ when destination=knowledge — auto-created on first write.
       Canonical: AI-Engineering | Data-Science | Guitar | Health | Investing | MOCs | Personal | References
     """
