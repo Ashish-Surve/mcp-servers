@@ -17,23 +17,11 @@ FOLDERS = [
     "03-Monthly",
     "04-Weekly",
     "05-Daily-Notes",
-    "06-Calendar-Events/DataScience",
-    "06-Calendar-Events/Guitar",
-    "06-Calendar-Events/Habits",
-    "06-Calendar-Events/Investing",
-    "06-Calendar-Events/TimeBlocks",
-    "06-Calendar-Events/Work",
+    "06-Calendar-Events",
     "07-Dashboard",
     "08-Queue",
     "09-Inbox",
     "10-Knowledge/MOCs",
-    "10-Knowledge/AI-Engineering",
-    "10-Knowledge/Data-Science",
-    "10-Knowledge/Health",
-    "10-Knowledge/Investing",
-    "10-Knowledge/Guitar",
-    "10-Knowledge/Personal",
-    "10-Knowledge/References",
     "11-Chores",
 ]
 
@@ -60,19 +48,19 @@ PRIORITY_QUEUE_CONTENT = """\
 LONG_TERM_GOALS_CONTENT = """\
 # Long-Term Goals
 
-## Health ^H
+## Area 1 ^A1
 -
 
-## DataScience ^DS
+## Area 2 ^A2
 -
 
-## Investing ^INV
+## Area 3 ^A3
 -
 
-## Guitar ^G
+## Area 4 ^A4
 -
 
-## Personal ^P
+## Area 5 ^A5
 -
 """
 

@@ -77,7 +77,7 @@ class TestFolderScaffolding:
             assert (vault / rel).is_dir(), f"Missing folder: {rel}"
 
     def test_folder_count(self):
-        assert len(setup.FOLDERS) == 23
+        assert len(setup.FOLDERS) == 11
 
     def test_idempotent_folder(self, vault, capsys):
         vault.mkdir()
@@ -115,7 +115,7 @@ class TestSeedFiles:
         path = vault / "02-Long-Term-Goals/Long-Term-Goals.md"
         setup.ensure_file(path, setup.LONG_TERM_GOALS_CONTENT)
         content = path.read_text()
-        for anchor in ("^H", "^DS", "^INV", "^G", "^P"):
+        for anchor in ("^A1", "^A2", "^A3", "^A4", "^A5"):
             assert anchor in content, f"Missing anchor: {anchor}"
 
     def test_daily_template_created(self, vault):
