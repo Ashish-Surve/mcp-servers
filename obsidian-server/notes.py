@@ -11,6 +11,8 @@ from datetime import date, timedelta
 from config import PRIORITY_EMOJI, VALID_SECTIONS, log
 from vault import VaultClient
 
+TEMPLATE_PATH = "01-Templates/Enhanced Daily Template.md"
+
 
 class DailyNote:
     """Read, create, and modify Obsidian daily notes."""
@@ -402,17 +404,56 @@ class DailyNote:
     # ── Template ─────────────────────────────────────────────────────────
 
     def _build_template(self, for_date: str) -> str:
-        """Build the full daily note markdown for a given date."""
+        """Render the daily note for for_date.
+
+        Reads 01-Templates/Enhanced Daily Template.md from the vault and
+        resolves all tp.date.now() expressions. Falls back to the hardcoded
+        template if the file is missing so the server stays functional.
+        """
+        raw = self._vault.get_file(TEMPLATE_PATH)
+        if raw:
+            return self._render_templater(raw, for_date)
+        log.warning("Template file %s not found — using built-in fallback", TEMPLATE_PATH)
+        return self._builtin_template(for_date)
+
+    def _resolve_tp_date(self, fmt: str, offset: int, base: date) -> str:
+        """Resolve a single tp.date.now(fmt, offset) call to a string."""
+        dt = base + timedelta(days=offset)
+        if fmt == "YYYY-MM-DD":
+            return dt.isoformat()
+        if fmt == "YYYY-MM":
+            return dt.strftime("%Y-%m")
+        if fmt == "GGGG-[W]WW":
+            iso = dt.isocalendar()
+            return f"{iso[0]}-W{iso[1]:02d}"
+        if fmt == "dddd, MMMM Do, YYYY":
+            return f"{dt.strftime('%A')}, {dt.strftime('%B')} {self.ordinal_suffix(dt.day)}, {dt.year}"
+        # Unknown format — return the raw moment string so it's visible
+        return f"<unsupported:{fmt}>"
+
+    def _render_templater(self, template: str, for_date: str) -> str:
+        """Replace all tp.date.now() expressions in template with real values."""
+        base = date.fromisoformat(for_date)
+
+        def replacer(m: re.Match) -> str:
+            fmt = m.group(1)
+            offset = int(m.group(2)) if m.group(2) else 0
+            return self._resolve_tp_date(fmt, offset, base)
+
+        # Matches: <% tp.date.now("FMT") %> and <% tp.date.now("FMT", N) %>
+        pattern = r"<%[ \t]*tp\.date\.now\(\"([^\"]+)\"(?:,[ \t]*(-?\d+))?[ \t]*\)[ \t]*%>"
+        return re.sub(pattern, replacer, template)
+
+    def _builtin_template(self, for_date: str) -> str:
+        """Hardcoded fallback template — used only when vault template is missing."""
         dt = date.fromisoformat(for_date)
         next_date = (dt + timedelta(days=1)).isoformat()
         prev_date = (dt - timedelta(days=1)).isoformat()
-
         day_name = dt.strftime("%A")
         month_name = dt.strftime("%B")
         day_ordinal = self.ordinal_suffix(dt.day)
         week_id = self.get_week_id(dt)
         month_id = self.get_month_id(dt)
-
         e1, e2, e3 = PRIORITY_EMOJI[1], PRIORITY_EMOJI[2], PRIORITY_EMOJI[3]
 
         return f"""# 📝 {for_date}
