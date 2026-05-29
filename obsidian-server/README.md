@@ -14,6 +14,28 @@ through natural language.
 
 ---
 
+## Obsidian plugins
+
+### Required
+
+| Plugin | Why |
+|---|---|
+| [Local REST API](https://obsidian.md/plugins?id=obsidian-local-rest-api) | How Claude talks to your vault — without this nothing works |
+
+### Recommended
+
+| Plugin | Why |
+|---|---|
+| [Templater](https://obsidian.md/plugins?id=templater-obsidian) | Auto-generates daily notes when you open a new day — point it at `01-Templates/Enhanced Daily Template.md` (seeded by `setup.py`). Do not modify this file; the MCP depends on its structure |
+| [Dataview](https://obsidian.md/plugins?id=dataview) | Powers dashboard queries across your vault |
+| [Full Calendar](https://obsidian.md/plugins?id=obsidian-full-calendar) | Visual calendar view of your `06-Calendar-Events/` time blocks |
+| [Kanban](https://obsidian.md/plugins?id=obsidian-kanban) | Renders `Priority-Queue.md` as a drag-and-drop board |
+| [Tasks](https://obsidian.md/plugins?id=obsidian-tasks-plugin) | Track due dates and recurring tasks across all notes |
+
+Install via **Settings → Community Plugins → Browse**, search by name, install and enable.
+
+---
+
 ## Setup (10 minutes)
 
 ### 1. Clone the repo
@@ -34,104 +56,51 @@ cd mcp-servers/obsidian-server
 
 ---
 
-### 3. Configure your environment
+### 3. Add your API key to `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` and fill in your values:
+Open `.env` and set your API key — that's the only value you need to fill in manually:
 
 ```env
 OBSIDIAN_API_KEY=paste-your-api-key-here
-OBSIDIAN_URL=https://127.0.0.1:27124/
-
-# Paths are relative to your vault root
-VAULT_FOLDER=05-Daily-Notes
-CALENDAR_FOLDER=06-Calendar-Events
-PLANNING_ROOT=
 ```
 
-> **PLANNING_ROOT** — leave empty if your numbered folders (`02-Long-Term-Goals`,
-> `03-Monthly`, `04-Weekly`, etc.) are at the vault root. Set it if they live
-> inside a subfolder, e.g. `PLANNING_ROOT=Planning System`.
+The rest of the values have sensible defaults. Only change them if you have a reason to:
+
+- `OBSIDIAN_URL` — change the port if you modified it in the plugin settings
+- `VAULT_FOLDER`, `CALENDAR_FOLDER` — leave as-is unless you renamed those folders
+- `PLANNING_ROOT` — leave empty if your numbered folders are at the vault root; set it if they live inside a subfolder, e.g. `PLANNING_ROOT=Planning System`
 
 ---
 
-### 4. Set up the vault structure
+### 4. Run the setup script
 
-Your vault needs these folders. Create them in Obsidian or via your file system:
-
-```
-your-vault/
-├── 02-Long-Term-Goals/
-│   └── Long-Term-Goals.md
-├── 03-Monthly/
-├── 04-Weekly/
-├── 05-Daily-Notes/
-├── 06-Calendar-Events/
-│   ├── DataScience/
-│   ├── Guitar/
-│   ├── Habits/
-│   ├── Investing/
-│   ├── TimeBlocks/
-│   └── Work/
-├── 08-Queue/
-│   └── Priority-Queue.md
-├── 09-Inbox/
-└── 10-Knowledge/
-    ├── MOCs/
-    ├── AI-Engineering/
-    ├── Health/
-    ├── Investing/
-    └── Personal/
+```bash
+uv run setup.py
 ```
 
-**Priority-Queue.md** must contain these exact section headings:
+The script will:
+- Ask for your vault path and save it to `.env`
+- Create all required folders in your vault
+- Write `Priority-Queue.md` and `Long-Term-Goals.md` with the correct structure
+- Print the exact JSON block to paste into your Claude config
 
-```markdown
-## 🔺 P1 — Do Soon
-
-## ⏫ P2 — Do This Week/Next
-
-## 🔼 P3 — Someday
-```
+> Safe to re-run — never overwrites existing files.
 
 ---
 
-### 5. Add to Claude config
+### 5. Add the printed JSON to your Claude config
 
-Find your config file:
+The setup script prints the exact block to paste — copy it and add it to your Claude config file:
+
 - **Mac:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 - **Claude Code:** `~/.claude/claude_desktop_config.json`
 
-Add this inside `"mcpServers"` — replace the path with your actual clone location:
-
-```json
-{
-  "mcpServers": {
-    "obsidian-daily-notes": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--project",
-        "/full/path/to/mcp-servers/obsidian-server",
-        "/full/path/to/mcp-servers/obsidian-server/server.py"
-      ]
-    }
-  }
-}
-```
-
-> **Mac example:**
-> `/Users/yourname/code/mcp-servers/obsidian-server`
->
-> **Windows example:**
-> `C:\\Users\\yourname\\code\\mcp-servers\\obsidian-server`
-> (use double backslashes in JSON)
-
-Restart Claude. You should see the tools icon (🔨) appear.
+Then restart Claude. You should see the tools icon (🔨) appear.
 
 ---
 
@@ -172,6 +141,12 @@ daily note and respond.
 
 ---
 
+## Token footprint
+
+This server exposes **28 tools**. The total schema injected into every Claude conversation is approximately **~1,350 tokens** — well under 1% of Claude's 200K context window. Tool schemas are kept deliberately lean; docstrings carry only what Claude needs to call each tool correctly.
+
+---
+
 ## Vault folder reference
 
 | Folder | Purpose |
@@ -184,6 +159,22 @@ daily note and respond.
 | `08-Queue/` | Task backlog (`Priority-Queue.md`) |
 | `09-Inbox/` | Raw captures pending processing |
 | `10-Knowledge/` | Processed notes + Maps of Content |
+
+---
+
+## Working with MOCs (Maps of Content)
+
+MOCs are theme hubs that group related knowledge notes together. You create them as you go — there are no presets.
+
+**Create a new MOC:**
+> "Create a MOC for cooking"
+
+**Save a note to an existing MOC:**
+> "Save this as a knowledge note about sourdough, link it to my Cooking MOC"
+
+Before linking a note to a MOC, Claude calls `moc_list` to see what MOCs actually exist in your vault — this prevents hallucinated or duplicate MOC names. If the MOC you want doesn't exist yet, Claude will create it first then link the note.
+
+Your MOCs live in `10-Knowledge/MOCs/` and grow organically as your knowledge base does.
 
 ---
 
@@ -217,6 +208,7 @@ daily note and respond.
 |---|---|---|
 | `OBSIDIAN_API_KEY` | *(required)* | From Local REST API plugin settings |
 | `OBSIDIAN_URL` | `https://127.0.0.1:27124/` | Change port if you modified it in plugin settings |
+| `VAULT_PATH` | *(prompted)* | Absolute path to your Obsidian vault root |
 | `VAULT_FOLDER` | `05-Daily-Notes` | Path to daily notes folder from vault root |
 | `CALENDAR_FOLDER` | `06-Calendar-Events` | Path to calendar events folder |
 | `PLANNING_ROOT` | *(empty)* | Parent folder for numbered subfolders, if any |

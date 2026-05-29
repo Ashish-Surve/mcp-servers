@@ -55,10 +55,10 @@ def set_priority(
     """
     Set a priority slot in the daily note. Pass start_time+end_time+category to also create a linked calendar event.
 
-    slot: 1=highest, 2=high, 3=medium | tag: datascience/guitar/habits/health/investing/learning/personal/prep
-    feeds: Obsidian link chain e.g. "[[2026-W08#DS-W1]] → [[2026-02#DS-M1]] → [[Long-Term-Goals#DS]]"
-    why: one-line reason e.g. "Build gym habit 3x/week throughout March"
-    category: TimeBlocks/DataScience/Investing/Guitar/Habits/Work | date: YYYY-MM-DD, empty=today
+    slot: 1=highest, 2=high, 3=medium | date: YYYY-MM-DD, empty=today
+    tag: user-defined e.g. "datascience" | category: TimeBlocks|DataScience|Investing|Guitar|Habits|Work
+    feeds: Obsidian link chain e.g. "[[2026-W08#DS-W1]] → [[Long-Term-Goals#DS]]"
+    why: one-line reason | duration: e.g. "30 min"
     """
     target = date or notes.today()
 
@@ -108,10 +108,7 @@ def update_priority(
     """
     Patch fields in an existing priority slot without touching the rest. At least one field required.
 
-    slot: 1–3 | date: YYYY-MM-DD, empty=today
-    feeds: Obsidian link chain | why: one-line reason | time_estimate: e.g. "30 min"
-    time_block: Obsidian link to event e.g. "[[2026-03-09 Deep Work]]"
-    completed: true to mark the checkbox done and stamp ✅ YYYY-MM-DD
+    slot: 1–3 | date: YYYY-MM-DD, empty=today | completed: marks done + stamps ✅
     """
     if not any([task, feeds, why, time_estimate, time_block, completed]):
         return "❌ Provide at least one field to update."
@@ -295,7 +292,7 @@ def create_event(
     priority: int = 0,
 ) -> str:
     """
-    Create a calendar event. category: TimeBlocks/DataScience/Investing/Guitar/Habits/Work.
+    Create a calendar event. category: TimeBlocks|DataScience|Investing|Guitar|Habits|Work.
     priority 1–3: also links event to that daily-note slot. date: YYYY-MM-DD, empty=today.
     """
     target = date or notes.today()
@@ -304,9 +301,8 @@ def create_event(
 
 @mcp.tool()
 def list_events(category: str, date: str = "", end_date: str = "") -> str:
-    """
-    List events by category. category: TimeBlocks/DataScience/Investing/Guitar/Habits/Work.
-    date: YYYY-MM-DD start filter, empty=all. end_date: YYYY-MM-DD for range view (requires date).
+    """List events by category. category: TimeBlocks|DataScience|Investing|Guitar|Habits|Work.
+    date: YYYY-MM-DD start, empty=all. end_date: for range (requires date).
     """
     return cal.list_events(category, date, end_date)
 
@@ -524,12 +520,8 @@ def knowledge_create(
     """
     Create an atomic knowledge note in 10-Knowledge/.
 
-    tags: comma-separated. E.g. "datascience,ml,python"
-    moc: MOC(s) this note belongs to — auto-adds backlink. Comma-separated for multiple.
-      E.g. "DataScience" or "Projects, AI Engineering"
-    subfolder: domain folder under 10-Knowledge/ — auto-created on first write.
-      Canonical: AI-Engineering | Data-Science | Guitar | Health | Investing | MOCs | Personal | References
-      Empty = root of 10-Knowledge/.
+    tags: comma-separated | subfolder: folder under 10-Knowledge/, auto-created. Empty = root.
+    moc: MOC name(s), comma-separated — call moc_list first to get exact existing names.
     """
     folder = f"{KNOWLEDGE_FOLDER}/{subfolder}" if subfolder else KNOWLEDGE_FOLDER
     path = f"{folder}/{title}.md"
@@ -537,12 +529,23 @@ def knowledge_create(
     tag_list = "\n".join([f"  - {t.strip()}" for t in tags.split(",")]) if tags else ""
 
     # Parse moc: comma-separated string → deduplicated list
-    moc_list = [m.strip() for m in moc.split(",") if m.strip()] if moc else []
+    moc_names = [m.strip() for m in moc.split(",") if m.strip()] if moc else []
     seen: set = set()
-    moc_list = [m for m in moc_list if not (m in seen or seen.add(m))]
+    moc_names = [m for m in moc_names if not (m in seen or seen.add(m))]
 
-    if moc_list:
-        moc_links = " | ".join([f"[[{m}]]" for m in moc_list])
+    if moc_names:
+        # Check requested names against what actually exists
+        existing_files = vault.list_folder(f"{KNOWLEDGE_FOLDER}/MOCs")
+        existing = {f.removesuffix(".md") for f in existing_files if f.endswith(".md")}
+        unknown = [m for m in moc_names if m not in existing]
+        if unknown:
+            existing_list = ", ".join(sorted(existing)) if existing else "none"
+            return (
+                f"❌ Unknown MOC(s): {', '.join(unknown)}. "
+                f"Existing MOCs: {existing_list}. "
+                f"Use moc_create first, or pick from the list above."
+            )
+        moc_links = " | ".join([f"[[{m}]]" for m in moc_names])
         moc_link = f"\n\n---\n🗺️ MOC: {moc_links}"
     else:
         moc_link = ""
@@ -556,7 +559,7 @@ tags:
 """
     vault.save_file(path, frontmatter + content + moc_link)
 
-    for m in moc_list:
+    for m in moc_names:
         moc_path = f"{KNOWLEDGE_FOLDER}/MOCs/{m}.md"
         vault_append(moc_path, f"\n- [[{title}]]")
 
@@ -592,6 +595,16 @@ tags:
     return f"✅ MOC created: {path}"
 
 
+@mcp.tool()
+def moc_list() -> str:
+    """List all existing MOCs. Call this before knowledge_create or inbox_process to pick a real MOC name."""
+    files = vault.list_folder(f"{KNOWLEDGE_FOLDER}/MOCs")
+    if not files:
+        return "No MOCs found. Use moc_create to create one."
+    names = [f.removesuffix(".md") for f in files if f.endswith(".md")]
+    return "Existing MOCs:\n" + "\n".join(f"- {n}" for n in sorted(names))
+
+
 # ── Inbox Processor ───────────────────────────────────────────────────────────
 
 
@@ -608,15 +621,10 @@ def inbox_process(
     """
     Process an inbox item — route it to its permanent home and mark as processed.
 
-    inbox_filename: from inbox_list(). E.g. "2026-02-20 1430 meeting.md"
-    destination: knowledge|project|queue|daily|weekly|reference|moc|delete
-    title: title for the new permanent note.
-    tags: comma-separated. E.g. "datascience,ml"
-    project: required when destination=project. E.g. "Intelligent Payroll"
-    moc: MOC name(s) to link when destination=knowledge. Comma-separated for multiple.
-      E.g. "DataScience" or "Projects, AI Engineering"
-    subfolder: domain folder under 10-Knowledge/ when destination=knowledge — auto-created on first write.
-      Canonical: AI-Engineering | Data-Science | Guitar | Health | Investing | MOCs | Personal | References
+    inbox_filename: from inbox_list() | destination: knowledge|project|queue|daily|weekly|reference|moc|delete
+    tags: comma-separated | project: required when destination=project
+    moc: MOC name(s), comma-separated — call moc_list first to get exact existing names.
+    subfolder: folder under 10-Knowledge/, auto-created.
     """
     inbox_path = f"09-Inbox/{inbox_filename}"
     raw_content = vault.get_file(inbox_path)
