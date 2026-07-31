@@ -10,15 +10,26 @@ Handles Long-Term, Monthly, and Weekly goal files:
 import re
 from datetime import date
 
-from config import PLANNING_ROOT, log
+from config import (
+    PLANNING_ROOT,
+    STATUS_EMOJI,
+    MONTHLY_GOALS_HEADING,
+    WEEKLY_GOALS_HEADING,
+    REVIEW_SCHEDULE_HEADING,
+    DONE_CHECKLIST_HEADING,
+    FIELD_GOAL,
+    FIELD_FEEDS,
+    FIELD_TIMELINE,
+    FIELD_WHY_MATTERS,
+    FIELD_SUCCESS_METRIC,
+    FIELD_SUCCESS_LOOKS_LIKE,
+    FIELD_TIME_NEEDED,
+    FIELD_TIME_BLOCKS,
+    FIELD_STATUS,
+    FIELD_LAST_UPDATED,
+    log,
+)
 from vault import VaultClient
-
-# Status emoji mapping
-STATUS_EMOJI = {
-    "not_started": "🔴",
-    "in_progress": "🟡",
-    "done": "✅",
-}
 
 
 class GoalsManager:
@@ -147,7 +158,7 @@ class GoalsManager:
 
 ---
 
-## Monthly Goals
+{MONTHLY_GOALS_HEADING}
 
 ---
 
@@ -206,17 +217,17 @@ class GoalsManager:
                 "Run create_monthly_goals first."
             )
 
-        section_heading = "## Monthly Goals"
+        section_heading = MONTHLY_GOALS_HEADING
         if section_heading not in content:
-            return f"❌ '## Monthly Goals' section not found in {month_id}.md."
+            return f"❌ '{MONTHLY_GOALS_HEADING}' section not found in {month_id}.md."
 
         block = (
             f"\n### {goal_code}\n"
-            f"**Goal:** {goal}\n"
-            f"**Feeds:** [[Long-Term-Goals#{feeds}]]\n"
-            f"**Why this matters:** {why_it_matters}\n"
-            f"**Success metric:** {success_metric}\n"
-            f"**Time needed:** {time_needed}\n"
+            f"{FIELD_GOAL} {goal}\n"
+            f"{FIELD_FEEDS} [[Long-Term-Goals#{feeds}]]\n"
+            f"{FIELD_WHY_MATTERS} {why_it_matters}\n"
+            f"{FIELD_SUCCESS_METRIC} {success_metric}\n"
+            f"{FIELD_TIME_NEEDED} {time_needed}\n"
         )
 
         # Insert block before the first '---' after the section heading
@@ -278,7 +289,7 @@ class GoalsManager:
 
 ---
 
-## Weekly Goals
+{WEEKLY_GOALS_HEADING}
 
 ---
 
@@ -286,7 +297,7 @@ class GoalsManager:
 
 > *Fill this in on Sunday*
 
-### Done?
+{DONE_CHECKLIST_HEADING}
 
 ### What went well?
 
@@ -325,15 +336,15 @@ class GoalsManager:
                 "Run create_weekly_goals first."
             )
 
-        section_heading = "## Weekly Goals"
+        section_heading = WEEKLY_GOALS_HEADING
         if section_heading not in content:
-            return f"❌ '## Weekly Goals' section not found in {week_id}.md."
+            return f"❌ '{WEEKLY_GOALS_HEADING}' section not found in {week_id}.md."
 
         block = (
             f"\n### {goal_code}\n"
-            f"**Goal:** {goal}\n"
-            f"**Feeds:** [[{month_id}#{feeds}]]\n"
-            f"**Time blocks:** {time_blocks}\n"
+            f"{FIELD_GOAL} {goal}\n"
+            f"{FIELD_FEEDS} [[{month_id}#{feeds}]]\n"
+            f"{FIELD_TIME_BLOCKS} {time_blocks}\n"
         )
 
         # Insert block before the first '---' after the section heading
@@ -349,7 +360,7 @@ class GoalsManager:
         updated_content = before_section + section_heading + updated_after
 
         # Also add to the Done? checklist in Review
-        done_heading = "### Done?"
+        done_heading = DONE_CHECKLIST_HEADING
         if done_heading in updated_content:
             updated_content = updated_content.replace(
                 done_heading,
@@ -412,16 +423,16 @@ class GoalsManager:
             goal_block = after_goal
             rest = ""
 
-        if "**Status:**" in goal_block:
+        if FIELD_STATUS in goal_block:
             goal_block = re.sub(
-                r"\*\*Status:\*\* .*",
-                f"**Status:** {status_value}",
+                re.escape(FIELD_STATUS) + r" .*",
+                f"{FIELD_STATUS} {status_value}",
                 goal_block,
                 count=1,
             )
         else:
             # Append Status line at end of the goal block (before trailing newlines)
-            goal_block = goal_block.rstrip("\n") + f"\n**Status:** {status_value}\n"
+            goal_block = goal_block.rstrip("\n") + f"\n{FIELD_STATUS} {status_value}\n"
 
         updated_content = before_goal + heading + goal_block + rest
 
@@ -505,13 +516,13 @@ class GoalsManager:
 
         block = (
             f"\n### {code}\n"
-            f"**Goal:** {goal}\n"
-            f"**Timeline:** {timeline}\n"
-            f"**Why this matters:** {why_it_matters}\n"
-            f"**Success looks like:** {success_looks_like}\n"
+            f"{FIELD_GOAL} {goal}\n"
+            f"{FIELD_TIMELINE} {timeline}\n"
+            f"{FIELD_WHY_MATTERS} {why_it_matters}\n"
+            f"{FIELD_SUCCESS_LOOKS_LIKE} {success_looks_like}\n"
         )
 
-        review_heading = "## Review Schedule"
+        review_heading = REVIEW_SCHEDULE_HEADING
         if review_heading in content:
             before_review, after_review = content.split(review_heading, 1)
             # Insert before the '---' that immediately precedes Review Schedule
@@ -528,10 +539,10 @@ class GoalsManager:
 
         # Update *Last updated:* line
         today_str = date.today().isoformat()
-        if "*Last updated:*" in updated_content:
+        if FIELD_LAST_UPDATED in updated_content:
             updated_content = re.sub(
-                r"\*Last updated:\*.*",
-                f"*Last updated:* {today_str}",
+                re.escape(FIELD_LAST_UPDATED) + r".*",
+                f"{FIELD_LAST_UPDATED} {today_str}",
                 updated_content,
                 count=1,
             )

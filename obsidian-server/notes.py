@@ -8,7 +8,21 @@ template placeholders, priority sections, quick-note sections, etc.
 import re
 from datetime import date, timedelta
 
-from config import PRIORITY_EMOJI, VALID_SECTIONS, log
+from config import (
+    PRIORITY_EMOJI,
+    VALID_SECTIONS,
+    PRIORITY_HEADING_FMT,
+    FIELD_TASK,
+    FIELD_FEEDS,
+    FIELD_WHY_IT_MATTERS,
+    FIELD_TIME_ESTIMATE,
+    FIELD_TIME_BLOCK,
+    DATE_MARKER,
+    TAG_PLACEHOLDER,
+    TAG_PLACEHOLDER_RENDERED,
+    TASKS_PLUGIN_METADATA_PATTERN,
+    log,
+)
 from vault import VaultClient
 
 TEMPLATE_PATH = "01-Templates/Enhanced Daily Template.md"
@@ -90,19 +104,19 @@ class DailyNote:
         emoji = PRIORITY_EMOJI[priority]
 
         placeholder = (
-            f"- [ ] #todo **Task:** 📅 {note_date} {emoji} #{{{{tag}}}}\n"
-            f"- **Feeds:**\n"
-            f"- **Why it matters:**\n"
-            f"- **Time estimate:**\n"
-            f"- **Time block:**"
+            f"- [ ] #todo {FIELD_TASK} {DATE_MARKER} {note_date} {emoji} #{TAG_PLACEHOLDER}\n"
+            f"- {FIELD_FEEDS}\n"
+            f"- {FIELD_WHY_IT_MATTERS}\n"
+            f"- {FIELD_TIME_ESTIMATE}\n"
+            f"- {FIELD_TIME_BLOCK}"
         )
 
         filled = (
-            f"- [ ] #todo **Task:** {task_name} 📅 {note_date} {emoji} #{tag}\n"
-            f"- **Feeds:** {feeds}\n"
-            f"- **Why it matters:** {why_it_matters}\n"
-            f"- **Time estimate:** {time_estimate}\n"
-            f"- **Time block:** {time_block}"
+            f"- [ ] #todo {FIELD_TASK} {task_name} {DATE_MARKER} {note_date} {emoji} #{tag}\n"
+            f"- {FIELD_FEEDS} {feeds}\n"
+            f"- {FIELD_WHY_IT_MATTERS} {why_it_matters}\n"
+            f"- {FIELD_TIME_ESTIMATE} {time_estimate}\n"
+            f"- {FIELD_TIME_BLOCK} {time_block}"
         )
 
         content = self._vault.get_note(note_date)
@@ -118,13 +132,138 @@ class DailyNote:
         self._vault.save_note(note_date, updated)
         log.info("Filled priority %d: %s", priority, task_name)
 
+    # ── Anchored block/line lookup ───────────────────────────────────────
+    #
+    # The functions below locate fields by searching for their label within
+    # the priority's section (bounded by the next heading or end of file)
+    # instead of assuming a fixed line offset from the header. This makes
+    # them tolerant of blank-line changes, reordered fields, or extra lines
+    # a user/plugin (e.g. the Tasks community plugin) may have inserted —
+    # the same anchoring style clear_priority/set_time_block already use.
+
+    @staticmethod
+    def _section_bounds(lines: list[str], start_idx: int) -> int:
+        """Return the line index where the section starting at start_idx ends
+        (the next '#'-heading line, or len(lines) if none)."""
+        for i in range(start_idx + 1, len(lines)):
+            if lines[i].startswith("#"):
+                return i
+        return len(lines)
+
+    def _find_priority_section(self, lines: list[str], priority: int) -> tuple[int, int]:
+        """Return (start_idx, end_idx) of the priority section's line range.
+
+        start_idx is the header line itself; end_idx is exclusive.
+        Raises ValueError if the header is not found.
+        """
+        header = PRIORITY_HEADING_FMT.format(n=priority)
+        try:
+            idx = lines.index(header)
+        except ValueError:
+            raise ValueError(f"Priority {priority} section not found in the note.")
+        return idx, self._section_bounds(lines, idx)
+
+    @staticmethod
+    def _find_field_line(lines: list[str], start: int, end: int, label: str) -> int:
+        """Return the index of the first line in [start, end) containing label.
+
+        Raises ValueError with a scoped message if not found.
+        """
+        for i in range(start, end):
+            if label in lines[i]:
+                return i
+        raise ValueError(
+            f"'{label}' line not found in this priority section — "
+            "it may have been removed or reworded."
+        )
+
+    @staticmethod
+    def _find_task_line(lines: list[str], start: int, end: int) -> int:
+        """Return the index of the task checkbox line in [start, end).
+
+        Matches any markdown checkbox ("- [ ]", "- [x]", "- [X]", etc.)
+        rather than assuming a fixed offset, so reordered/edited sections
+        are still found.
+        """
+        for i in range(start, end):
+            if re.match(r"^\s*- \[.\]", lines[i]):
+                return i
+        raise ValueError(
+            "Task checkbox line not found in this priority section — "
+            "it may have been deleted or its checkbox syntax altered."
+        )
+
+    @staticmethod
+    def _split_task_line(line: str) -> dict:
+        """Parse a task checkbox line into its structural parts.
+
+        Tolerant of metadata the Tasks community plugin inserts (its own
+        priority emoji, recurrence, scheduled/start/due dates, done-date),
+        which may appear interleaved with this app's own **Task:**/📅/#tag
+        fields. Anything recognized as Tasks-plugin metadata is treated as
+        an opaque suffix to preserve, never as part of the task description.
+
+        Returns {"done": bool, "prefix": str, "task_text": str, "tag": str,
+        "metadata_suffix": str} — prefix is the literal "- [ ] #todo " (or
+        whatever checkbox/marker text precedes **Task:**).
+
+        Raises ValueError if the line doesn't contain the **Task:** marker.
+        """
+        checkbox_match = re.match(r"^(\s*- \[(.)\]\s*)", line)
+        done = bool(checkbox_match) and checkbox_match.group(2).lower() == "x"
+
+        task_marker = f"{FIELD_TASK} "
+        if task_marker not in line:
+            raise ValueError(
+                f"'{FIELD_TASK}' marker not found in task line — "
+                "the line may have been edited in a way that's no longer recognized."
+            )
+        marker_end = line.index(task_marker) + len(task_marker)
+        prefix = line[:marker_end]
+        rest = line[marker_end:]
+
+        # Find where the task description ends: the first Tasks-plugin
+        # metadata emoji (our own 📅 date marker is one of them) marks the
+        # start of the metadata tail. Everything before it is description
+        # text (the #tag, if present right before the date, is pulled out
+        # separately below).
+        meta_match = re.search(TASKS_PLUGIN_METADATA_PATTERN, rest)
+        if meta_match:
+            task_text = rest[: meta_match.start()].rstrip()
+            metadata_suffix = rest[meta_match.start():]
+        else:
+            # No recognized metadata at all — whole remainder is task text.
+            task_text = rest.rstrip()
+            metadata_suffix = ""
+
+        # Extract our #tag: last "#word" token in the metadata suffix that
+        # isn't part of a recurrence phrase, scanned from the end so any
+        # Tasks-plugin tags elsewhere on the line don't get picked instead.
+        tag = ""
+        for token in reversed(metadata_suffix.split()):
+            if token.startswith("#") and not token.startswith("#todo"):
+                tag = token[1:]
+                break
+
+        return {
+            "done": done,
+            "prefix": prefix,
+            "task_text": task_text,
+            "tag": tag,
+            "metadata_suffix": metadata_suffix,
+        }
+
     def clear_priority(self, note_date: str, priority: int) -> None:
         """Reset a priority slot back to its empty template placeholder.
 
-        Matches the filled 5-line block (Task/Feeds/Why/Estimate/Block) and
-        replaces it with the unfilled template version.
+        Locates the task/feeds/why/estimate/time-block lines by anchored
+        label search within this priority's section (tolerant of Tasks
+        community plugin metadata on the task line) and rewrites each of
+        them to its unfilled form, rather than matching one fragile 5-line
+        regex that breaks if any extra metadata is present.
 
-        Raises ValueError if the note, section, or filled task is not found.
+        Raises ValueError if the note, section, or task line is not found,
+        or if the slot is already empty (still shows the tag placeholder).
         """
         emoji = PRIORITY_EMOJI[priority]
 
@@ -132,38 +271,27 @@ class DailyNote:
         if not content:
             raise ValueError(f"No daily note for {note_date}.")
 
-        label = f"### Priority {priority}"
-        if label not in content:
-            raise ValueError(f"Priority {priority} section not found in the note.")
+        lines = content.split("\n")
+        start, end = self._find_priority_section(lines, priority)
+        task_idx = self._find_task_line(lines, start, end)
+        task_line = lines[task_idx]
 
-        # Match the 5-line filled task block within this priority section
-        filled_pattern = (
-            r"- \[.\] #todo \*\*Task:\*\* .+ 📅 " + re.escape(note_date)
-            + r" " + re.escape(emoji) + r" #\w+\n"
-            r"- \*\*Feeds:\*\* .*\n"
-            r"- \*\*Why it matters:\*\* .*\n"
-            r"- \*\*Time estimate:\*\* .*\n"
-            r"- \*\*Time block:\*\* .*"
-        )
-
-        placeholder = (
-            f"- [ ] #todo **Task:** 📅 {note_date} {emoji} #{{{{tag}}}}\n"
-            f"- **Feeds:**\n"
-            f"- **Why it matters:**\n"
-            f"- **Time estimate:**\n"
-            f"- **Time block:**"
-        )
-
-        before, after = content.split(label, 1)
-        updated_after, count = re.subn(filled_pattern, placeholder, after, count=1)
-
-        if count == 0:
+        if f"#{TAG_PLACEHOLDER_RENDERED}" in task_line or f"#{TAG_PLACEHOLDER}" in task_line:
             raise ValueError(
                 f"Priority {priority} slot appears to be empty already "
                 "or has an unexpected format."
             )
 
-        self._vault.save_note(note_date, before + label + updated_after)
+        lines[task_idx] = f"- [ ] #todo {FIELD_TASK} {DATE_MARKER} {note_date} {emoji} #{TAG_PLACEHOLDER}"
+
+        for label in (FIELD_FEEDS, FIELD_WHY_IT_MATTERS, FIELD_TIME_ESTIMATE, FIELD_TIME_BLOCK):
+            try:
+                idx = self._find_field_line(lines, start, end, label)
+            except ValueError:
+                continue  # field line missing — nothing to clear, leave section as-is
+            lines[idx] = f"- {label}"
+
+        self._vault.save_note(note_date, "\n".join(lines))
         log.info("Cleared priority %d for %s", priority, note_date)
 
     def patch_priority(
@@ -181,68 +309,67 @@ class DailyNote:
 
         Only fields passed as non-empty strings are updated; others are left untouched.
         Pass completed=True to mark the checkbox done and stamp ✅ YYYY-MM-DD.
-        Uses fixed line offsets from the section header (template is always consistent):
 
-          ### Priority N   ← header
-          (blank)          ← +1
-          - [ ] #todo ...  ← +2  task line
-          - **Feeds:** ... ← +3
-          - **Why it ...** ← +4
-          - **Time est:**  ← +5
-          - **Time block** ← +6
+        Fields are located by searching for their label within the priority's
+        section (bounded by the next heading) rather than assuming a fixed
+        line offset, so the section tolerates blank-line changes, reordering,
+        or extra lines a user/Tasks-plugin may have inserted.
 
-        Raises ValueError if the note is missing or the priority section is not found.
+        Raises ValueError if the note, the priority section, the task line,
+        or a requested field's line cannot be found.
         """
         content = self._vault.get_note(note_date)
         if not content:
             raise ValueError(f"No daily note for {note_date}.")
 
-        header = f"### Priority {priority}"
         lines = content.split("\n")
-
-        try:
-            idx = lines.index(header)
-        except ValueError:
-            raise ValueError(f"Priority {priority} section not found in the note.")
-
-        # Fixed offsets relative to the section header line
-        TASK_OFF, FEEDS_OFF, WHY_OFF, EST_OFF, BLOCK_OFF = 2, 3, 4, 5, 6
+        start, end = self._find_priority_section(lines, priority)
 
         if task:
-            existing = lines[idx + TASK_OFF]
-            # Line format: "- [x] #todo **Task:** TASKTEXT 📅 DATE EMOJI #TAG"
-            marker_end = existing.index("**Task:** ") + len("**Task:** ")
-            date_marker = " 📅 "
-            date_pos = existing.index(date_marker, marker_end)
-            date_suffix = existing[date_pos:]  # " 📅 DATE EMOJI #OLDTAG"
+            task_idx = self._find_task_line(lines, start, end)
+            parts = self._split_task_line(lines[task_idx])
 
-            # If the new task text ends with an embedded #tag, extract it and
-            # replace the trailing tag in the date suffix so old tags are not kept.
+            # If the new task text ends with an embedded #tag, swap it into
+            # the metadata suffix so the old tag isn't kept; otherwise the
+            # existing tag (and all other Tasks-plugin metadata) is preserved
+            # untouched.
             task_clean = task
+            metadata_suffix = parts["metadata_suffix"]
             tag_match = re.search(r'\s(#\w+)$', task)
             if tag_match:
                 task_clean = task[:tag_match.start()]
                 new_tag = tag_match.group(1)
-                date_suffix = re.sub(r'#\w+$', new_tag, date_suffix)
+                if parts["tag"]:
+                    metadata_suffix = re.sub(
+                        r'#' + re.escape(parts["tag"]) + r'\b', new_tag, metadata_suffix, count=1
+                    )
+                else:
+                    metadata_suffix = (metadata_suffix + f" {new_tag}").strip()
 
-            lines[idx + TASK_OFF] = existing[:marker_end] + task_clean + date_suffix
+            separator = " " if metadata_suffix and not metadata_suffix.startswith(" ") else ""
+            lines[task_idx] = parts["prefix"] + task_clean + separator + metadata_suffix
 
         if feeds is not None and feeds != "":
-            lines[idx + FEEDS_OFF] = f"- **Feeds:** {feeds}"
+            idx = self._find_field_line(lines, start, end, FIELD_FEEDS)
+            lines[idx] = f"- {FIELD_FEEDS} {feeds}"
 
         if why is not None and why != "":
-            lines[idx + WHY_OFF] = f"- **Why it matters:** {why}"
+            idx = self._find_field_line(lines, start, end, FIELD_WHY_IT_MATTERS)
+            lines[idx] = f"- {FIELD_WHY_IT_MATTERS} {why}"
 
         if time_estimate:
-            lines[idx + EST_OFF] = f"- **Time estimate:** {time_estimate}"
+            idx = self._find_field_line(lines, start, end, FIELD_TIME_ESTIMATE)
+            lines[idx] = f"- {FIELD_TIME_ESTIMATE} {time_estimate}"
 
         if time_block:
-            lines[idx + BLOCK_OFF] = f"- **Time block:** {time_block}"
+            idx = self._find_field_line(lines, start, end, FIELD_TIME_BLOCK)
+            lines[idx] = f"- {FIELD_TIME_BLOCK} {time_block}"
 
         if completed:
-            task_line = lines[idx + TASK_OFF]
-            if task_line.startswith("- [ ]"):
-                lines[idx + TASK_OFF] = task_line.replace("- [ ]", "- [x]", 1) + f" ✅ {note_date}"
+            completed_idx = self._find_task_line(lines, start, end)
+            task_line = lines[completed_idx]
+            if re.match(r"^\s*- \[ \]", task_line):
+                lines[completed_idx] = re.sub(r"- \[ \]", "- [x]", task_line, count=1) + f" ✅ {note_date}"
 
         self._vault.save_note(note_date, "\n".join(lines))
         log.info("Patched priority %d for %s", priority, note_date)
@@ -250,28 +377,23 @@ class DailyNote:
     def set_time_block(self, note_date: str, priority: int, time_block: str) -> None:
         """Update the Time block line for a given priority.
 
-        Raises ValueError if the note or priority section is missing.
+        The Time block line is located by label search bounded to this
+        priority's own section, so a missing/malformed line raises rather
+        than silently matching a Time block line in a different section.
+
+        Raises ValueError if the note, the priority section, or the Time
+        block line is missing.
         """
         content = self._vault.get_note(note_date)
         if not content:
             raise ValueError(f"No daily note for {note_date}.")
 
-        label = f"### Priority {priority}"
-        if label not in content:
-            raise ValueError(f"Priority {priority} section not found in the note.")
+        lines = content.split("\n")
+        start, end = self._find_priority_section(lines, priority)
+        idx = self._find_field_line(lines, start, end, FIELD_TIME_BLOCK)
+        lines[idx] = f"- {FIELD_TIME_BLOCK} {time_block}"
 
-        before, after = content.split(label, 1)
-        updated_after, n = re.subn(
-            r"- \*\*Time block:\*\* .*",
-            f"- **Time block:** {time_block}",
-            after,
-            count=1,
-        )
-        if n == 0:
-            raise ValueError(
-                f"Priority {priority} time block line not found — slot may be empty or malformed."
-            )
-        self._vault.save_note(note_date, before + label + updated_after)
+        self._vault.save_note(note_date, "\n".join(lines))
         log.info("Set time block for priority %d: %s", priority, time_block)
 
     def link_event_to_priority(
@@ -288,13 +410,25 @@ class DailyNote:
             log.warning("Could not link event to priority %d: %s", priority, exc)
             return False
 
+    @staticmethod
+    def _val(line: str, label: str) -> str:
+        """Extract the value following a field label, e.g. '- **Feeds:** x' -> 'x'."""
+        pos = line.find(label)
+        return line[pos + len(label):].strip() if pos != -1 else ""
+
     def get_priorities(self, note_date: str) -> dict:
         """Return all three priority slots as structured dicts.
 
-        Uses fixed line offsets from each '### Priority N' header (template is always consistent):
-          +2: task line   +3: feeds   +4: why   +5: time_estimate   +6: time_block
+        Fields are located by searching for their label within each
+        priority's section (bounded by the next heading) rather than
+        assuming a fixed line offset, so reordered fields, extra blank
+        lines, or lines a user/Tasks-plugin inserted don't shift reads
+        onto the wrong line.
 
-        Returns {1: {...}, 2: {...}, 3: {...}} where empty/unfilled slots have value None.
+        Returns {1: {...}, 2: {...}, 3: {...}} where empty/unfilled slots
+        have value None. A section whose task line is missing/unparsable
+        is also treated as unfilled (None) rather than raising, since this
+        is a read-only listing call.
         """
         content = self._vault.get_note(note_date)
         if not content:
@@ -304,55 +438,46 @@ class DailyNote:
         result = {}
 
         for priority in (1, 2, 3):
-            header = f"### Priority {priority}"
             try:
-                idx = lines.index(header)
+                start, end = self._find_priority_section(lines, priority)
             except ValueError:
                 result[priority] = None
                 continue
 
-            task_line = lines[idx + 2] if idx + 2 < len(lines) else ""
-
-            # Unfilled placeholder contains literal "#{tag}" (double-braced in template → single brace in file)
-            if "#{tag}" in task_line or "#{{tag}}" in task_line:
+            try:
+                task_idx = self._find_task_line(lines, start, end)
+            except ValueError:
                 result[priority] = None
                 continue
 
-            def _val(line: str) -> str:
-                """Extract value after the first ': ' in a field line."""
-                sep = ": "
-                pos = line.find(sep)
-                return line[pos + len(sep):].strip() if pos != -1 else ""
+            task_line = lines[task_idx]
 
-            feeds_line = lines[idx + 3] if idx + 3 < len(lines) else ""
-            why_line   = lines[idx + 4] if idx + 4 < len(lines) else ""
-            est_line   = lines[idx + 5] if idx + 5 < len(lines) else ""
-            block_line = lines[idx + 6] if idx + 6 < len(lines) else ""
+            # Unfilled placeholder contains literal "#{tag}" (double-braced in template → single brace in file)
+            if f"#{TAG_PLACEHOLDER_RENDERED}" in task_line or f"#{TAG_PLACEHOLDER}" in task_line:
+                result[priority] = None
+                continue
 
-            # Extract tag from task line: last #word token before end
-            tag = ""
-            for token in reversed(task_line.split()):
-                if token.startswith("#") and not token.startswith("#todo"):
-                    tag = token[1:]
-                    break
+            try:
+                task_parts = self._split_task_line(task_line)
+            except ValueError:
+                result[priority] = None
+                continue
 
-            # Extract task text: between "**Task:** " and " 📅"
-            task_text = ""
-            task_marker = "**Task:** "
-            date_marker = " 📅"
-            if task_marker in task_line and date_marker in task_line:
-                start = task_line.index(task_marker) + len(task_marker)
-                end = task_line.index(date_marker, start)
-                task_text = task_line[start:end].strip()
+            def _field(label: str) -> str:
+                try:
+                    idx = self._find_field_line(lines, start, end, label)
+                except ValueError:
+                    return ""
+                return self._val(lines[idx], label)
 
             result[priority] = {
-                "task": task_text,
-                "tag": tag,
-                "feeds": _val(feeds_line),
-                "why": _val(why_line),
-                "time_estimate": _val(est_line),
-                "time_block": _val(block_line),
-                "done": task_line.startswith("- [x]"),
+                "task": task_parts["task_text"],
+                "tag": task_parts["tag"],
+                "feeds": _field(FIELD_FEEDS),
+                "why": _field(FIELD_WHY_IT_MATTERS),
+                "time_estimate": _field(FIELD_TIME_ESTIMATE),
+                "time_block": _field(FIELD_TIME_BLOCK),
+                "done": task_parts["done"],
             }
 
         return result
@@ -387,8 +512,8 @@ class DailyNote:
         next_date = self.tomorrow_from(note_date)
         emoji = PRIORITY_EMOJI[priority]
 
-        placeholder = f"{priority}. [ ] #todo 📅 {next_date} {emoji} #{{{{tag}}}}"
-        filled = f"{priority}. [ ] #todo {task_name} 📅 {next_date} {emoji} #{tag}"
+        placeholder = f"{priority}. [ ] #todo {DATE_MARKER} {next_date} {emoji} #{TAG_PLACEHOLDER}"
+        filled = f"{priority}. [ ] #todo {task_name} {DATE_MARKER} {next_date} {emoji} #{tag}"
 
         content = self._vault.get_note(note_date)
         if not content:
@@ -456,6 +581,18 @@ class DailyNote:
         month_id = self.get_month_id(dt)
         e1, e2, e3 = PRIORITY_EMOJI[1], PRIORITY_EMOJI[2], PRIORITY_EMOJI[3]
 
+        def _priority_block(n: int, emoji: str, for_date: str) -> str:
+            return (
+                f"{PRIORITY_HEADING_FMT.format(n=n)}\n\n"
+                f"- [ ] #todo {FIELD_TASK} {DATE_MARKER} {for_date} {emoji} #{TAG_PLACEHOLDER}\n"
+                f"- {FIELD_FEEDS}\n"
+                f"- {FIELD_WHY_IT_MATTERS}\n"
+                f"- {FIELD_TIME_ESTIMATE}\n"
+                f"- {FIELD_TIME_BLOCK}\n"
+            )
+
+        priority_blocks = "\n".join(_priority_block(n, e, for_date) for n, e in ((1, e1), (2, e2), (3, e3)))
+
         return f"""# 📝 {for_date}
 
 _{day_name}, {month_name} {day_ordinal}, {dt.year}_
@@ -468,30 +605,7 @@ _{day_name}, {month_name} {day_ordinal}, {dt.year}_
 
 ## 🔥 Priorities
 
-### Priority 1
-
-- [ ] #todo **Task:** 📅 {for_date} {e1} #{{{{tag}}}}
-- **Feeds:**
-- **Why it matters:**
-- **Time estimate:**
-- **Time block:**
-
-### Priority 2
-
-- [ ] #todo **Task:** 📅 {for_date} {e2} #{{{{tag}}}}
-- **Feeds:**
-- **Why it matters:**
-- **Time estimate:**
-- **Time block:**
-
-### Priority 3
-
-- [ ] #todo **Task:** 📅 {for_date} {e3} #{{{{tag}}}}
-- **Feeds:**
-- **Why it matters:**
-- **Time estimate:**
-- **Time block:**
-
+{priority_blocks}
 ---
 
 ## 🔄 Habits
@@ -512,9 +626,9 @@ _{day_name}, {month_name} {day_ordinal}, {dt.year}_
 
 ## 🔄 Tomorrow's Prep
 
-1. [ ] #todo 📅 {next_date} {e1} #{{{{tag}}}}
-2. [ ] #todo 📅 {next_date} {e2} #{{{{tag}}}}
-3. [ ] #todo 📅 {next_date} {e3} #{{{{tag}}}}
+1. [ ] #todo {DATE_MARKER} {next_date} {e1} #{TAG_PLACEHOLDER}
+2. [ ] #todo {DATE_MARKER} {next_date} {e2} #{TAG_PLACEHOLDER}
+3. [ ] #todo {DATE_MARKER} {next_date} {e3} #{TAG_PLACEHOLDER}
 
 ---
 

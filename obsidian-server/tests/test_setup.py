@@ -45,7 +45,7 @@ def _load_setup(env_file: Path):
     """Import setup.py with load_dotenv pointed at env_file."""
     spec = importlib.util.spec_from_file_location(
         "setup",
-        Path(__file__).parent / "setup.py",
+        Path(__file__).parent.parent / "setup.py",
     )
     mod = importlib.util.module_from_spec(spec)
     with patch("dotenv.load_dotenv"):
@@ -60,7 +60,7 @@ def _load_setup(env_file: Path):
 
 with patch("dotenv.load_dotenv"):
     import importlib.util as _ilu
-    _spec = _ilu.spec_from_file_location("setup", Path(__file__).parent / "setup.py")
+    _spec = _ilu.spec_from_file_location("setup", Path(__file__).parent.parent / "setup.py")
     setup = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(setup)
 
@@ -215,6 +215,16 @@ def daily_note():
     fake_config.DAILY_NOTES_FOLDER = "05-Daily-Notes"
     fake_config.CALENDAR_FOLDER = "06-Calendar-Events"
     fake_config.KNOWLEDGE_FOLDER = "10-Knowledge"
+    fake_config.PRIORITY_HEADING_FMT = "### Priority {n}"
+    fake_config.FIELD_TASK = "**Task:**"
+    fake_config.FIELD_FEEDS = "**Feeds:**"
+    fake_config.FIELD_WHY_IT_MATTERS = "**Why it matters:**"
+    fake_config.FIELD_TIME_ESTIMATE = "**Time estimate:**"
+    fake_config.FIELD_TIME_BLOCK = "**Time block:**"
+    fake_config.DATE_MARKER = "📅"
+    fake_config.TAG_PLACEHOLDER = "{{tag}}"
+    fake_config.TAG_PLACEHOLDER_RENDERED = "{tag}"
+    fake_config.TASKS_PLUGIN_METADATA_PATTERN = r"(?:[🔺⏫🔼🔽⏬🔁➕🛫⏳📅✅❌]\S*(?:\s|$))"
 
     fake_vault_mod = types.ModuleType("vault")
     fake_vault_mod.VaultClient = MagicMock
